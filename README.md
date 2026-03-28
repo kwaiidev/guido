@@ -154,6 +154,15 @@ cd agents
 adk web
 ```
 
+### Pipe voice transcripts into ADK
+
+```bash
+python3 scripts/voice_stream.py --model models/vosk-model-small-en-us-0.15 \
+  | python3 scripts/adk_transcript_bridge.py
+```
+
+The transcript bridge reads final transcript lines from stdin, ignores `PARTIAL` output, normalizes wake words and destination aliases, and forwards compact commands into the ADK agent.
+
 ### Verify scan data
 
 ```bash
@@ -176,7 +185,7 @@ Expected chain: `base_footprint -> base_link -> ldlidar_base -> ldlidar_link`
 
 ## Voice Transcription Utility
 
-`scripts/voice_stream.py` is a standalone terminal transcription utility. It captures microphone audio from the local machine, performs continuous speech-to-text with Vosk, writes transcript lines to stdout, and keeps logs on stderr so it can be piped into another process later.
+`scripts/voice_stream.py` captures microphone audio, performs speech-to-text with either Vosk or ElevenLabs realtime STT, and writes transcript lines to stdout so it can be piped into other processes.
 
 ### Install voice dependencies
 
@@ -198,7 +207,7 @@ unzip -q /tmp/vosk-model-small-en-us-0.15.zip -d models
 
 This creates a model directory like `models/vosk-model-small-en-us-0.15`.
 
-### Run the voice stream
+### Run the voice stream with Vosk
 
 Plain text, one finalized utterance per line:
 
@@ -245,6 +254,23 @@ python3 scripts/voice_stream.py --model models/vosk-model-small-en-us-0.15 | som
 ```
 
 If you omit `--model`, the script can try `--language en-us`, but passing `--model` is the recommended path for predictable offline operation.
+
+### Run the voice stream with ElevenLabs
+
+Export your runtime key and run:
+
+```bash
+export ELEVENLABS_API_KEY='your-key'
+python3 scripts/voice_stream.py --backend elevenlabs --elevenlabs-vad --partials
+```
+
+The stdout format stays the same, so it still pipes cleanly into ADK:
+
+```bash
+export ELEVENLABS_API_KEY='your-key'
+python3 scripts/voice_stream.py --backend elevenlabs --elevenlabs-vad \
+  | python3 scripts/adk_transcript_bridge.py
+```
 
 ### Linux microphone notes
 

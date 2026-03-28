@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Stream microphone speech recognition to stdout using Vosk.
+"""Stream microphone speech recognition to stdout using Vosk or ElevenLabs.
 
 Recommended offline usage:
   python3 scripts/voice_stream.py --model /path/to/unpacked-vosk-model
+
+Recommended ElevenLabs usage:
+  ELEVENLABS_API_KEY=... python3 scripts/voice_stream.py --backend elevenlabs
 
 The script keeps stdout transcript-only so it can be piped into another
 process. Status, warnings, and errors are written to stderr.
@@ -11,10 +14,14 @@ process. Status, warnings, and errors are written to stderr.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
 from datetime import datetime
 import json
 from pathlib import Path
 import queue
+import os
+from urllib.parse import urlencode
 import sys
 from typing import Any
 
@@ -40,15 +47,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
+        "--backend",
+        choices=("vosk", "elevenlabs"),
+        default="vosk",
+        help="Speech-to-text backend to use (default: vosk).",
+    )
+    parser.add_argument(
         "--model",
         type=str,
-        help="Path to an unpacked Vosk model directory. Recommended for fully offline use.",
+        help="Path to an unpacked Vosk model directory. Recommended for fully offline Vosk use.",
     )
     parser.add_argument(
         "--language",
         type=str,
         default="en-us",
-        help="Vosk language/model identifier when --model is not provided (default: en-us).",
+        help="Language hint for the backend (default: en-us).",
     )
     parser.add_argument(
         "--device",
@@ -80,6 +93,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="List available audio devices and exit.",
     )
+    parser.add_argument(
+        "--elevenlabs-model",
+        default="scribe_v2_realtime",
+        help="ElevenLabs realtime STT model id (default: scribe_v2_realtime).",
+    )
+    parser.add_argument(
+        "--elevenlabs-language",
+        help="Optional ElevenLabs language code override. Defaults to --language when using ElevenLabs.",
+    )
+    parser.add_argument(
+        "--elevenlabs-vad",
+        action="store_true",
+        help="Use ElevenLabs VAD commit strategy for microphone streaming. Recommended for live speech.",
+    )
     return parser.parse_args(argv)
 
 
@@ -104,6 +131,17 @@ def import_vosk():
             "'python3 -m pip install -r scripts/requirements-voice.txt'."
         ) from exc
     return Model, KaldiRecognizer, SetLogLevel
+
+
+def import_websockets():
+    try:
+        import websockets
+    except ModuleNotFoundError as exc:
+        raise VoiceStreamError(
+            "Missing Python dependency 'websockets'. Install with "
+            "'python3 -m pip install -r scripts/requirements-voice.txt'."
+        ) from exc
+    return websockets
 
 
 def list_devices() -> int:
@@ -261,13 +299,63 @@ def flush_final_result(recognizer, args: argparse.Namespace) -> None:
     emit_event(text=str(payload.get("text", "")), is_final=True, args=args, payload=payload)
 
 
+def parse_elevenlabs_payload(raw: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        eprint(f"warning: ignoring invalid ElevenLabs JSON payload: {exc}")
+        return {}
+
+    if not isinstance(payload, dict):
+        eprint("warning: ignoring unexpected ElevenLabs payload")
+        return {}
+
+    return payload
+
+
+def extract_elevenlabs_word_timing(payload: dict[str, Any]) -> tuple[float | None, float | None]:
+    words = payload.get("words")
+    if not isinstance(words, list) or not words:
+        return None, None
+
+    first_word = next((word for word in words if isinstance(word, dict) and word.get("type") == "word"), None)
+    last_word = next(
+        (word for word in reversed(words) if isinstance(word, dict) and word.get("type") == "word"),
+        None,
+    )
+    if not first_word or not last_word:
+        return None, None
+
+    start = first_word.get("start")
+    end = last_word.get("end")
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return None, None
+
+    return round(float(start), 3), round(float(end), 3)
+
+
+def emit_elevenlabs_event(payload: dict[str, Any], is_final: bool, args: argparse.Namespace) -> None:
+    text = str(payload.get("text", ""))
+    if not text.strip():
+        return
+
+    proxy_payload: dict[str, Any] | None = None
+    if args.timestamps:
+        start_sec, end_sec = extract_elevenlabs_word_timing(payload)
+        proxy_payload = {}
+        if start_sec is not None and end_sec is not None:
+            proxy_payload["result"] = [{"start": start_sec}, {"end": end_sec}]
+
+    emit_event(text=text, is_final=is_final, args=args, payload=proxy_payload)
+
+
 def run_stream(args: argparse.Namespace) -> int:
     sd = import_sounddevice()
     model_cls, recognizer_cls, set_log_level = import_vosk()
     set_log_level(-1)
 
-    samplerate, device_info = resolve_sample_rate(sd, args.device, args.samplerate)
     model, model_label = load_model(args.model, args.language, model_cls)
+    samplerate, device_info = resolve_sample_rate(sd, args.device, args.samplerate)
 
     device_name = str(device_info.get("name", args.device if args.device is not None else "default"))
     audio_queue: queue.Queue[bytes] = queue.Queue()
@@ -334,12 +422,132 @@ def run_stream(args: argparse.Namespace) -> int:
         ) from exc
 
 
+async def run_elevenlabs_stream(args: argparse.Namespace) -> int:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise VoiceStreamError(
+            "ELEVENLABS_API_KEY is not set. Export it for the current shell before "
+            "running --backend elevenlabs."
+        )
+
+    if args.model:
+        eprint("voice_stream: --model is ignored when using --backend elevenlabs")
+
+    sd = import_sounddevice()
+    websockets = import_websockets()
+
+    samplerate, device_info = resolve_sample_rate(sd, args.device, args.samplerate)
+    if samplerate != 16000:
+        eprint(
+            f"voice_stream: ElevenLabs recommends pcm_16000. Using requested sample rate {samplerate} Hz."
+        )
+
+    query_params = {
+        "model_id": args.elevenlabs_model,
+        "audio_format": f"pcm_{samplerate}",
+        "include_timestamps": str(args.timestamps).lower(),
+        "include_language_detection": "false",
+        "language_code": args.elevenlabs_language or args.language,
+        "commit_strategy": "vad" if args.elevenlabs_vad else "manual",
+        "enable_logging": "true",
+    }
+
+    ws_url = "wss://api.elevenlabs.io/v1/speech-to-text/realtime?" + urlencode(query_params)
+    headers = {"xi-api-key": api_key}
+
+    device_name = str(device_info.get("name", args.device if args.device is not None else "default"))
+    audio_queue: queue.Queue[bytes | None] = queue.Queue()
+
+    def callback(indata, frames, time_info, status) -> None:
+        del frames, time_info
+        if status:
+            eprint(f"audio: {status}")
+        audio_queue.put(bytes(indata))
+
+    eprint(
+        f"voice_stream listening on '{device_name}' at {samplerate} Hz using ElevenLabs model "
+        f"'{args.elevenlabs_model}'. Press Ctrl+C to stop."
+    )
+
+    async def sender(websocket) -> None:
+        while True:
+            chunk = await asyncio.to_thread(audio_queue.get)
+            if chunk is None:
+                break
+
+            message = {
+                "message_type": "input_audio_chunk",
+                "audio_base_64": base64.b64encode(chunk).decode("ascii"),
+                "sample_rate": samplerate,
+            }
+            await websocket.send(json.dumps(message))
+
+    async def receiver(websocket) -> None:
+        async for raw_message in websocket:
+            payload = parse_elevenlabs_payload(raw_message)
+            if not payload:
+                continue
+
+            message_type = str(payload.get("message_type", ""))
+            if message_type == "session_started":
+                eprint("voice_stream: ElevenLabs realtime session started.")
+                continue
+            if message_type == "partial_transcript":
+                if args.partials:
+                    emit_elevenlabs_event(payload, is_final=False, args=args)
+                continue
+            if message_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
+                emit_elevenlabs_event(payload, is_final=True, args=args)
+                continue
+            if "error" in message_type or message_type == "error":
+                detail = payload.get("message") or payload.get("detail") or raw_message
+                raise VoiceStreamError(f"ElevenLabs realtime transcription failed: {detail}")
+
+    try:
+        with sd.RawInputStream(
+            samplerate=samplerate,
+            blocksize=8000,
+            device=args.device,
+            dtype="int16",
+            channels=1,
+            callback=callback,
+        ):
+            async with websockets.connect(ws_url, additional_headers=headers) as websocket:
+                sender_task = asyncio.create_task(sender(websocket))
+                receiver_task = asyncio.create_task(receiver(websocket))
+                done, pending = await asyncio.wait(
+                    {sender_task, receiver_task},
+                    return_when=asyncio.FIRST_EXCEPTION,
+                )
+
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    exception = task.exception()
+                    if exception:
+                        raise exception
+    except KeyboardInterrupt:
+        eprint("voice_stream interrupted; stopping.")
+        return 0
+    except Exception as exc:  # pragma: no cover - depends on host network/audio stack
+        raise VoiceStreamError(
+            "ElevenLabs microphone stream failed. Check microphone access, network access, "
+            f"and ELEVENLABS_API_KEY. Original error: {exc}"
+        ) from exc
+    finally:
+        audio_queue.put(None)
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     try:
         if args.list_devices:
             return list_devices()
+        if args.backend == "elevenlabs":
+            return asyncio.run(run_elevenlabs_stream(args))
         return run_stream(args)
     except VoiceStreamError as exc:
         eprint(f"error: {exc}")

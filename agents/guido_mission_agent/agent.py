@@ -152,6 +152,8 @@ Rules:
 - Never do obstacle avoidance.
 - Only use mission types: heading_goal, waypoint_goal, stop.
 - Use lookup_destination before sending a waypoint or heading mission.
+- Spoken aliases like "front door", "charging station", and "window corner" should resolve to their canonical destinations without asking the user to repeat internal ids.
+- Keep responses short because this agent may receive live transcript input from a microphone pipeline.
 - If a destination is unknown, use list_destinations and ask the user to choose.
 - get_robot_status reports the simple in-memory status for now.
 """.strip(),
