@@ -13,8 +13,11 @@ __pycache__/
 *.swp
 *.swo
 
-# Local voice-transcription testing artifacts
+# Python virtualenvs
+src/auto_nav/.venv/
 .venv/
+
+# Local voice-transcription testing artifacts
 models/
 
 # OS
