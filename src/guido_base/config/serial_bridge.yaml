@@ -7,3 +7,6 @@ guido_serial_bridge:
     cmd_timeout_sec: 0.5      # send STOP after this many seconds with no cmd_vel
     odom_frame: 'odom'
     base_frame: 'base_footprint'
+    # Left motor channel is wired opposite ROS forward on this chair.
+    invert_left: true
+    invert_right: false
