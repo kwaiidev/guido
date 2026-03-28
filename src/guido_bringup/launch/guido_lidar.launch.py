@@ -1,10 +1,10 @@
 """Launch the full Guido wheelchair stack.
 
 Starts:
-  1. robot_state_publisher  – publishes the Guido URDF TF tree
-  2. guido_serial_bridge    – cmd_vel <-> Arduino serial <-> odom + TF
-  3. ldlidar_bringup        – LDLidar driver (scan topic + ldlidar TF)
-  4. lifecycle_manager      – auto-configures and activates the lidar node
+  1. robot_state_publisher  - publishes the Guido URDF TF tree
+  2. guido_serial_bridge    - cmd_vel <-> Arduino serial <-> odom + TF
+  3. ldlidar_bringup        - LDLidar driver (scan topic + ldlidar TF)
+  4. lifecycle_manager      - auto-configures and activates the lidar node
 """
 
 import os

@@ -1,4 +1,4 @@
-# Guido — Autonomous Wheelchair
+# Guido - Autonomous Wheelchair
 
 ROS 2-controlled autonomous wheelchair stack for NVIDIA Jetson, with LiDAR sensing and a serial motor-controller bridge for base motion.
 
@@ -7,33 +7,37 @@ ROS 2-controlled autonomous wheelchair stack for NVIDIA Jetson, with LiDAR sensi
 | Component | Model |
 |-----------|-------|
 | Compute   | NVIDIA Jetson (Orin Nano / AGX Orin) |
-| LiDAR     | LDRobot LD19 (360° DToF, 12 m range) |
+| LiDAR     | LDRobot LD19 (360 deg DToF, 12 m range) |
 | Platform  | Power wheelchair with motor controller |
 
 ## Project Layout
 
-```
+```text
 guido/
-├── scripts/
-│   ├── install_ros2_jazzy.sh   # ROS 2 Jazzy installer (Ubuntu 24.04 / JP6)
-│   └── setup_lidar.sh          # workspace deps + LiDAR udev rules + build
-├── src/
-│   ├── guido_base/             # ROS 2 serial bridge for the wheelchair motor controller
-│   │   ├── config/
-│   │   │   └── serial_bridge.yaml  # serial port + wheel geometry config
-│   │   └── guido_base/
-│   │       └── serial_bridge.py    # /cmd_vel -> serial, serial -> /odom + TF
-│   ├── guido_bringup/          # Launch files, LiDAR config, wheelchair URDF
-│   │   ├── config/
-│   │   │   ├── ldlidar.yaml
-│   │   │   └── lifecycle_mgr.yaml
-│   │   ├── launch/
-│   │   │   ├── guido_base.launch.py
-│   │   │   └── guido_lidar.launch.py
-│   │   └── urdf/
-│   │       └── guido.urdf.xml
-│   └── ldrobot-lidar-ros2/     # LDLidar ROS 2 driver (jazzy branch)
-└── README.md
+|- scripts/
+|  |- install_ros2_jazzy.sh   # ROS 2 Jazzy installer (Ubuntu 24.04 / JP6)
+|  |- setup_lidar.sh          # workspace deps + LiDAR udev rules + build
+|  `- guido_git_steward.sh    # helper for repo maintenance
+|- agents/
+|  `- guido_mission_agent/    # existing minimal ADK app entrypoint
+|- src/
+|  |- guido_base/             # ROS 2 serial bridge for the wheelchair motor controller
+|  |  |- config/
+|  |  |  `- serial_bridge.yaml
+|  |  `- guido_base/
+|  |     |- serial_bridge.py  # /cmd_vel -> serial, serial -> /odom + TF
+|  |     `- keyboard_teleop.py
+|  |- guido_bringup/          # launch files, LiDAR config, wheelchair URDF
+|  |  |- config/
+|  |  |  |- ldlidar.yaml
+|  |  |  `- lifecycle_mgr.yaml
+|  |  |- launch/
+|  |  |  |- guido_base.launch.py
+|  |  |  `- guido_lidar.launch.py
+|  |  `- urdf/
+|  |     `- guido.urdf.xml
+|  `- ldrobot-lidar-ros2/     # LDLidar ROS 2 driver (jazzy branch)
+`- README.md
 ```
 
 ## Setup
@@ -77,8 +81,8 @@ ros2 launch guido_bringup guido_base.launch.py
 ```
 
 This starts:
-- **guido_state_publisher** — publishes the wheelchair URDF TF tree
-- **guido_serial_bridge** — subscribes to `/cmd_vel`, sends motor commands over serial, and publishes `/odom` plus `odom -> base_footprint`
+- **guido_state_publisher** - publishes the wheelchair URDF TF tree
+- **guido_serial_bridge** - subscribes to `/cmd_vel`, sends motor commands over serial, and publishes `/odom` plus `odom -> base_footprint`
 
 ### Drive the wheelchair through ROS
 
@@ -122,16 +126,30 @@ ros2 launch guido_bringup guido_lidar.launch.py
 ```
 
 This starts:
-- **guido_state_publisher** — publishes the wheelchair URDF TF tree
-- **guido_serial_bridge** — exposes wheelchair motion through `/cmd_vel`, `/odom`, and TF
-- **ldlidar_node** — LDRobot driver publishing `/ldlidar_node/scan` (`sensor_msgs/LaserScan`)
-- **lifecycle_manager** — auto-configures and activates the lidar node
+- **guido_state_publisher** - publishes the wheelchair URDF TF tree
+- **guido_serial_bridge** - exposes wheelchair motion through `/cmd_vel`, `/odom`, and TF
+- **ldlidar_node** - LDRobot driver publishing `/ldlidar_node/scan` (`sensor_msgs/LaserScan`)
+- **lifecycle_manager** - auto-configures and activates the lidar node
 
 ### Verify base topics
 
 ```bash
 ros2 node info /guido_serial_bridge
 ros2 topic echo /odom
+```
+
+### Existing ADK mission agent
+
+The repo already contains a minimal ADK mission agent under `agents/`, but it remains separate from the ROS stack and from any voice input utility.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install google-adk
+export GOOGLE_API_KEY='your-key'
+export GUIDO_ADK_MODEL=gemini-2.5-flash
+cd agents
+adk web
 ```
 
 ### Verify scan data
@@ -152,7 +170,7 @@ ros2 launch ldlidar_node ldlidar_rviz2.launch.py
 ros2 run tf2_tools view_frames
 ```
 
-Expected chain: `base_footprint → base_link → ldlidar_base → ldlidar_link`
+Expected chain: `base_footprint -> base_link -> ldlidar_base -> ldlidar_link`
 
 ## Configuration
 
@@ -209,6 +227,18 @@ sudo chmod 666 /dev/ttyUSB1
 sudo apt install ros-jazzy-nav2-util ros-jazzy-nav2-msgs ros-jazzy-nav2-lifecycle-manager
 ```
 
+## Minimal ADK Tools
+
+The current ADK app exposes only five simple tools:
+
+- `list_destinations`
+- `lookup_destination`
+- `get_robot_status`
+- `send_mission`
+- `cancel_mission`
+
+This is enough to demo command understanding and mission packaging on the Nano. It does not drive the chair and it does not replace ROS safety logic.
+
 ## License
 
-Apache 2.0 — LDLidar driver by [Walter Lucetti / Myzhar](https://github.com/Myzhar/ldrobot-lidar-ros2).
+Apache 2.0 - LDLidar driver by [Walter Lucetti / Myzhar](https://github.com/Myzhar/ldrobot-lidar-ros2).

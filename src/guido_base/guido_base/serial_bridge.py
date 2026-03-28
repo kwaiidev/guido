@@ -2,10 +2,10 @@
 
 Subscribes to /cmd_vel (Twist), converts to differential-drive PWM commands,
 sends them over serial to the Arduino. Reads odometry back from the Arduino
-and publishes /odom + broadcasts the odom -> base_footprint TF.
+and publishes /odom plus the odom -> base_footprint TF.
 
 Arduino protocol:
-  TX (Jetson -> Arduino): "L<int> R<int>\n"   e.g. "L150 R-150\n" or "STOP\n"
+  TX (Jetson -> Arduino): "L<int> R<int>\n" or "STOP\n"
   RX (Arduino -> Jetson): "ODOM <x> <y> <theta> <vLin> <vAng>\n"
 """
 
@@ -16,16 +16,15 @@ from geometry_msgs.msg import Quaternion, TransformStamped, Twist
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
-from tf2_ros import TransformBroadcaster
-
 import serial
+from tf2_ros import TransformBroadcaster
 
 
 def yaw_to_quaternion(yaw: float) -> Quaternion:
-    q = Quaternion()
-    q.z = math.sin(yaw / 2.0)
-    q.w = math.cos(yaw / 2.0)
-    return q
+    quaternion = Quaternion()
+    quaternion.z = math.sin(yaw / 2.0)
+    quaternion.w = math.cos(yaw / 2.0)
+    return quaternion
 
 
 class SerialBridge(Node):
@@ -77,21 +76,23 @@ class SerialBridge(Node):
             self.get_logger().error(f'Cannot open {self._port_name}: {exc}')
             self._serial = None
 
-    def _write_serial(self, msg: str):
+    def _write_serial(self, message: str):
         if self._serial is None or not self._serial.is_open:
             self._connect_serial()
-        if self._serial is not None and self._serial.is_open:
-            try:
-                self._serial.write(msg.encode('ascii'))
-            except serial.SerialException as exc:
-                self.get_logger().warn(f'Serial write error: {exc}')
-                self._serial = None
+        if self._serial is None or not self._serial.is_open:
+            return
 
-    def _cmd_vel_cb(self, msg: Twist):
+        try:
+            self._serial.write(message.encode('ascii'))
+        except serial.SerialException as exc:
+            self.get_logger().warn(f'Serial write error: {exc}')
+            self._serial = None
+
+    def _cmd_vel_cb(self, message: Twist):
         self._last_cmd_time = self.get_clock().now()
 
-        linear_x = msg.linear.x
-        angular_z = msg.angular.z
+        linear_x = message.linear.x
+        angular_z = message.angular.z
 
         v_left = linear_x - (angular_z * self._wheel_base / 2.0)
         v_right = linear_x + (angular_z * self._wheel_base / 2.0)
@@ -141,18 +142,18 @@ class SerialBridge(Node):
             self._broadcast_tf(stamp, x, y, theta)
 
     def _publish_odom(self, stamp, x, y, theta, v_lin, v_ang):
-        msg = Odometry()
-        msg.header.stamp = stamp
-        msg.header.frame_id = self._odom_frame
-        msg.child_frame_id = self._base_frame
+        message = Odometry()
+        message.header.stamp = stamp
+        message.header.frame_id = self._odom_frame
+        message.child_frame_id = self._base_frame
 
-        msg.pose.pose.position.x = x
-        msg.pose.pose.position.y = y
-        msg.pose.pose.orientation = yaw_to_quaternion(theta)
-        msg.twist.twist.linear.x = v_lin
-        msg.twist.twist.angular.z = v_ang
+        message.pose.pose.position.x = x
+        message.pose.pose.position.y = y
+        message.pose.pose.orientation = yaw_to_quaternion(theta)
+        message.twist.twist.linear.x = v_lin
+        message.twist.twist.angular.z = v_ang
 
-        self._odom_pub.publish(msg)
+        self._odom_pub.publish(message)
 
     def _broadcast_tf(self, stamp, x, y, theta):
         transform = TransformStamped()
@@ -165,8 +166,8 @@ class SerialBridge(Node):
         self._tf_broadcaster.sendTransform(transform)
 
     @staticmethod
-    def _clamp(val, lo, hi):
-        return max(lo, min(hi, val))
+    def _clamp(value, lower, upper):
+        return max(lower, min(upper, value))
 
     def destroy_node(self):
         self._write_serial('STOP\n')
