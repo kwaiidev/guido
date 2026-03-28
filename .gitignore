@@ -13,6 +13,9 @@ __pycache__/
 *.swp
 *.swo
 
+#python
+src/auto_nav/.venv/
+
 # OS
 .DS_Store
 Thumbs.db
