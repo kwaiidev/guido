@@ -8,6 +8,7 @@ guido_serial_bridge:
     odom_frame: 'odom'
     base_frame: 'base_footprint'
     # Direction and gain calibration for the chair's motor controller channels.
+    swap_left_right: false
     invert_left: false
     invert_right: false
     left_pwm_scale: 1.0

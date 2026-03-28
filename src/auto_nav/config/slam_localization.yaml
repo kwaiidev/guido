@@ -1,0 +1,18 @@
+slam_toolbox:
+  ros__parameters:
+    mode: localization
+    map_frame: map
+    odom_frame: odom
+    base_frame: base_link
+    scan_topic: /ldlidar_node/scan
+    map_file_name: ''
+    minimum_time_interval: 0.5
+    transform_publish_period: 0.05
+    max_laser_range: 12.0
+    throttle_scans: 1
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.05
+    minimum_travel_heading: 0.05
+    tf_buffer_duration: 30.0
+    use_map_saver: false

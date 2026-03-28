@@ -38,6 +38,7 @@ class SerialBridge(Node):
         self.declare_parameter('cmd_timeout_sec', 0.5)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('swap_left_right', False)
         self.declare_parameter('invert_left', False)
         self.declare_parameter('invert_right', False)
         self.declare_parameter('left_pwm_scale', 1.0)
@@ -52,6 +53,7 @@ class SerialBridge(Node):
         self._cmd_timeout = self.get_parameter('cmd_timeout_sec').value
         self._odom_frame = self.get_parameter('odom_frame').value
         self._base_frame = self.get_parameter('base_frame').value
+        self._swap_left_right = bool(self.get_parameter('swap_left_right').value)
         self._invert_left = bool(self.get_parameter('invert_left').value)
         self._invert_right = bool(self.get_parameter('invert_right').value)
         self._left_pwm_scale = float(self.get_parameter('left_pwm_scale').value)
@@ -124,6 +126,9 @@ class SerialBridge(Node):
             scale=self._right_pwm_scale,
             min_abs_pwm=self._right_min_abs_pwm,
         )
+
+        if self._swap_left_right:
+            pwm_left, pwm_right = pwm_right, pwm_left
 
         self._write_serial(f'L{pwm_left} R{pwm_right}\n')
 
