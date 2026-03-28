@@ -12,3 +12,5 @@ guido_serial_bridge:
     invert_right: false
     left_pwm_scale: 1.0
     right_pwm_scale: 1.0
+    left_min_abs_pwm: 45
+    right_min_abs_pwm: 35

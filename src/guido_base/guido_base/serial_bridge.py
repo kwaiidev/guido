@@ -42,6 +42,8 @@ class SerialBridge(Node):
         self.declare_parameter('invert_right', False)
         self.declare_parameter('left_pwm_scale', 1.0)
         self.declare_parameter('right_pwm_scale', 1.0)
+        self.declare_parameter('left_min_abs_pwm', 0)
+        self.declare_parameter('right_min_abs_pwm', 0)
 
         self._port_name = self.get_parameter('serial_port').value
         self._baudrate = self.get_parameter('baudrate').value
@@ -54,6 +56,8 @@ class SerialBridge(Node):
         self._invert_right = bool(self.get_parameter('invert_right').value)
         self._left_pwm_scale = float(self.get_parameter('left_pwm_scale').value)
         self._right_pwm_scale = float(self.get_parameter('right_pwm_scale').value)
+        self._left_min_abs_pwm = int(self.get_parameter('left_min_abs_pwm').value)
+        self._right_min_abs_pwm = int(self.get_parameter('right_min_abs_pwm').value)
 
         self._serial = None
         self._connect_serial()
@@ -108,13 +112,18 @@ class SerialBridge(Node):
         pwm_left = int(self._clamp(v_left / self._max_wheel_vel * 255.0, -255, 255))
         pwm_right = int(self._clamp(v_right / self._max_wheel_vel * 255.0, -255, 255))
 
-        if self._invert_left:
-            pwm_left = -pwm_left
-        if self._invert_right:
-            pwm_right = -pwm_right
-
-        pwm_left = int(self._clamp(pwm_left * self._left_pwm_scale, -255, 255))
-        pwm_right = int(self._clamp(pwm_right * self._right_pwm_scale, -255, 255))
+        pwm_left = self._apply_wheel_calibration(
+            pwm_left,
+            invert=self._invert_left,
+            scale=self._left_pwm_scale,
+            min_abs_pwm=self._left_min_abs_pwm,
+        )
+        pwm_right = self._apply_wheel_calibration(
+            pwm_right,
+            invert=self._invert_right,
+            scale=self._right_pwm_scale,
+            min_abs_pwm=self._right_min_abs_pwm,
+        )
 
         self._write_serial(f'L{pwm_left} R{pwm_right}\n')
 
@@ -184,6 +193,21 @@ class SerialBridge(Node):
     @staticmethod
     def _clamp(value, lower, upper):
         return max(lower, min(upper, value))
+
+    def _apply_wheel_calibration(self, pwm, *, invert, scale, min_abs_pwm):
+        if invert:
+            pwm = -pwm
+
+        pwm = pwm * scale
+        if pwm == 0:
+            return 0
+
+        sign = 1 if pwm > 0 else -1
+        magnitude = min(255, abs(pwm))
+        if 0 < magnitude < min_abs_pwm:
+            magnitude = min_abs_pwm
+
+        return int(sign * magnitude)
 
     def destroy_node(self):
         self._write_serial('STOP\n')
