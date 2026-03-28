@@ -12,6 +12,7 @@
 
   <exec_depend>ldlidar_node</exec_depend>
   <exec_depend>ldlidar_component</exec_depend>
+  <exec_depend>guido_base</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>launch_ros</exec_depend>
