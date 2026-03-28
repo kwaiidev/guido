@@ -1,0 +1,4 @@
+[submodule "src/ldrobot-lidar-ros2"]
+	path = src/ldrobot-lidar-ros2
+	url = https://github.com/Myzhar/ldrobot-lidar-ros2.git
+	branch = jazzy

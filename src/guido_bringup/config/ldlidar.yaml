@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    general:
+      debug_mode: false
+
+    comm:
+      serial_port: '/dev/ldlidar'
+      baudrate: 230400
+      timeout_msec: 1000
+
+    lidar:
+      model: 'LDLiDAR_LD19'
+      rot_verse: 'CCW'
+      units: 'M'
+      frame_id: 'ldlidar_link'
+      bins: 455            # fixed bin count for SLAM Toolbox compatibility
+      range_min: 0.03
+      range_max: 15.0
+      enable_angle_crop: false
+      angle_crop_min: 0.0
+      angle_crop_max: 360.0

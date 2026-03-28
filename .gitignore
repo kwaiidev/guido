@@ -1,0 +1,18 @@
+# Colcon build artifacts
+build/
+install/
+log/
+
+# ROS 2 generated
+*.pyc
+__pycache__/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
