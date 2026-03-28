@@ -16,10 +16,13 @@ LiDAR-navigated autonomous wheelchair powered by ROS 2 Jazzy on NVIDIA Jetson.
 guido/
 ├── scripts/
 │   ├── install_ros2_jazzy.sh   # ROS 2 Jazzy installer (Ubuntu 24.04 / JP6)
-│   └── setup_lidar.sh          # udev rules + rosdep + colcon build
+│   ├── setup_lidar.sh          # udev rules + rosdep + colcon build
+│   └── ...
+├── agents/
+│   └── guido_mission_agent/    # Minimal ADK app entrypoint (root_agent)
 ├── src/
 │   ├── ldrobot-lidar-ros2/     # LDLidar ROS 2 driver (jazzy branch)
-│   └── guido_bringup/          # Guido launch files and config
+│   ├── guido_bringup/          # Guido launch files and config
 │       ├── config/
 │       │   ├── ldlidar.yaml        # LiDAR parameters
 │       │   └── lifecycle_mgr.yaml  # Nav2 lifecycle manager config
@@ -70,6 +73,27 @@ This starts:
 - **guido_state_publisher** — publishes the wheelchair URDF TF tree
 - **ldlidar_node** — LDRobot driver publishing `/ldlidar_node/scan` (`sensor_msgs/LaserScan`)
 - **lifecycle_manager** — auto-configures and activates the lidar node
+
+### Run the ADK mission agent
+
+Install ADK in a Python virtual environment on the Nano:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install google-adk
+```
+
+Then export your Gemini key for the current shell and run ADK from the `agents/` directory:
+
+```bash
+export GOOGLE_API_KEY='your-key'
+export GUIDO_ADK_MODEL=gemini-2.5-flash
+cd agents
+adk web
+```
+
+The ADK app is intentionally simple. It keeps mission state in memory so it can run directly on the Nano without extra ROS-side ADK packaging.
 
 ### Verify scan data
 
@@ -123,6 +147,18 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ```bash
 sudo apt install ros-jazzy-nav2-util ros-jazzy-nav2-msgs ros-jazzy-nav2-lifecycle-manager
 ```
+
+## Minimal ADK Tools
+
+The current ADK app exposes only five simple tools:
+
+- `list_destinations`
+- `lookup_destination`
+- `get_robot_status`
+- `send_mission`
+- `cancel_mission`
+
+This is enough to demo command understanding and mission packaging on the Nano. It does not drive the chair and it does not replace ROS safety logic.
 
 ## License
 
