@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from google.adk.agents import Agent
+from google.adk.agents import SequentialAgent
 
 WAYPOINTS: dict[str, dict[str, Any]] = {
     "front_door": {
@@ -32,6 +33,7 @@ MISSION_STATE: dict[str, Any] = {
     "active_mission": None,
     "last_message": "No mission has been sent yet.",
 }
+MODEL_NAME = os.getenv("GUIDO_ADK_MODEL", "gemini-2.5-flash")
 
 
 def list_destinations() -> dict[str, Any]:
@@ -135,34 +137,133 @@ def cancel_mission() -> dict[str, Any]:
     }
 
 
-root_agent = Agent(
-    name="guido_mission_agent",
-    model=os.getenv("GUIDO_ADK_MODEL", "gemini-2.5-flash"),
+intent_agent = Agent(
+    name="intent_agent",
+    model=MODEL_NAME,
+    description="Classifies the user's latest wheelchair request.",
     instruction="""
-You are Guido's simple mission agent for an indoor wheelchair demo.
+You are Guido's Intent Agent.
 
-Your job is only to:
-- understand the user's command
-- resolve it to a known indoor destination or heading
-- package it into a mission
-- report status back
+Read the user's latest command and classify it into one of:
+- navigate
+- stop
+- status
+- unknown
+
+Treat phrases like "take me", "go to", "turn toward", "head to", or "navigate to"
+as navigate.
+Treat phrases like "stop", "cancel", or "halt" as stop.
+Treat phrases like "what's my status" or "where are you" as status.
+
+Output exactly these four lines:
+intent=<navigate|stop|status|unknown>
+target_phrase=<destination phrase or none>
+needs_destination=<yes|no>
+needs_status=<yes|no>
+""".strip(),
+    output_key="intent_summary",
+)
+
+destination_agent = Agent(
+    name="destination_agent",
+    model=MODEL_NAME,
+    description="Resolves named indoor destinations into known goals.",
+    instruction="""
+You are Guido's Destination Agent.
+
+Read the current mission intent from:
+{intent_summary}
 
 Rules:
-- Never generate cmd_vel or motor commands.
-- Never do obstacle avoidance.
-- Only use mission types: heading_goal, waypoint_goal, stop.
-- Use lookup_destination before sending a waypoint or heading mission.
-- Spoken aliases like "front door", "charging station", and "window corner" should resolve to their canonical destinations without asking the user to repeat internal ids.
-- Keep responses short because this agent may receive live transcript input from a microphone pipeline.
-- If a destination is unknown, use list_destinations and ask the user to choose.
-- get_robot_status reports the simple in-memory status for now.
+- If intent is not navigate, do not resolve a destination.
+- If intent is navigate, call lookup_destination using the target_phrase.
+- Spoken aliases like "front door", "charging station", and "window corner"
+  should resolve to the canonical destination without asking for the internal id.
+- If lookup_destination fails, call list_destinations.
+
+Output exactly these lines:
+destination_status=<resolved|unknown|not_needed>
+destination_name=<canonical name or none>
+mission_type=<heading_goal|waypoint_goal|none>
+goal_id=<goal id or none>
+target_x=<number or none>
+target_y=<number or none>
+target_theta=<number or none>
+target_heading_deg=<number or none>
+available_destinations=<comma separated names or none>
 """.strip(),
-    description="Minimal Guido ADK connection for running directly on the Nano.",
-    tools=[
-        list_destinations,
-        lookup_destination,
-        get_robot_status,
-        send_mission,
-        cancel_mission,
+    tools=[lookup_destination, list_destinations],
+    output_key="resolved_destination",
+    include_contents="none",
+)
+
+mission_planner_agent = Agent(
+    name="mission_planner_agent",
+    model=MODEL_NAME,
+    description="Packages a resolved request into a Guido mission.",
+    instruction="""
+You are Guido's Mission Planner Agent.
+
+Use these prior agent results:
+Intent:
+{intent_summary}
+
+Destination:
+{resolved_destination}
+
+Rules:
+- Never generate cmd_vel or low-level motor commands.
+- Only use mission types: heading_goal, waypoint_goal, stop.
+- If intent is stop, call send_mission with mission_type='stop'.
+- If intent is status, do not send a mission.
+- If intent is navigate and destination_status is resolved, call send_mission with
+  the resolved mission type and target fields.
+- If the destination is unknown, do not send a mission.
+
+Output exactly these lines:
+mission_status=<accepted|status_only|destination_unknown|unsupported>
+mission_message=<short summary>
+""".strip(),
+    tools=[send_mission, cancel_mission],
+    output_key="mission_dispatch",
+    include_contents="none",
+)
+
+status_agent = Agent(
+    name="status_agent",
+    model=MODEL_NAME,
+    description="Returns the final user-facing wheelchair mission response.",
+    instruction="""
+You are Guido's Status Agent.
+
+Summarize the final result for the user using these prior agent results:
+Intent:
+{intent_summary}
+
+Destination:
+{resolved_destination}
+
+Mission:
+{mission_dispatch}
+
+Rules:
+- If mission_status is accepted or status_only, call get_robot_status.
+- If destination_status is unknown, respond with a short destination error and
+  include the available destinations.
+- Keep the final answer short and plain.
+- Do not mention internal agent names or state keys.
+""".strip(),
+    tools=[get_robot_status],
+    include_contents="none",
+)
+
+root_agent = SequentialAgent(
+    name="guido_mission_agent",
+    description="Minimal Guido ADK mission workforce for command understanding, destination resolution, mission planning, and status reporting.",
+    sub_agents=[
+        intent_agent,
+        destination_agent,
+        mission_planner_agent,
+        status_agent,
     ],
 )
