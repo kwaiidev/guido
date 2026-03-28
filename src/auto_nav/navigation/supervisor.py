@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .commands import HELP_TEXT, help_text_for_mode
-from .frontiers import select_frontier_goal
+from .frontiers import compute_coverage, select_frontier_goal
 from .health import HealthMonitor
 from .types import (
     ActionType,
     CommandContext,
     CommandResponse,
     CommandType,
+    FrontierParams,
     NavigationResult,
     NavigationStatus,
     OccupancyGridSnapshot,
@@ -33,6 +34,7 @@ from .waypoints import (
 class _ActiveGoal:
     waypoint: Waypoint
     started_at: float
+    timeout: float = 10.0
     cancel_requested: bool = False
     is_exploration: bool = False
     frontier_reference_pose: Optional[Pose2D] = None
@@ -51,6 +53,12 @@ class NavigationSupervisor:
         mode: str = OperatingMode.NAVIGATION.value,
         map_output_dir: Optional[Path] = None,
         map_save_stem_factory: Optional[Callable[[], str]] = None,
+        frontier_params: Optional[FrontierParams] = None,
+        base_timeout: float = 15.0,
+        expected_speed: float = 0.12,
+        timeout_safety_factor: float = 2.5,
+        empty_cycle_threshold: int = 3,
+        coverage_threshold: float = 0.0,
     ):
         self._waypoint_store = waypoint_store
         self._health_monitor = health_monitor
@@ -65,11 +73,18 @@ class NavigationSupervisor:
             else Path.home() / ".guido" / "maps"
         )
         self._map_save_stem_factory = map_save_stem_factory or _default_map_save_stem
+        self._frontier_params = frontier_params or FrontierParams()
+        self._base_timeout = base_timeout
+        self._expected_speed = expected_speed
+        self._timeout_safety_factor = timeout_safety_factor
+        self._empty_cycle_threshold = empty_cycle_threshold
+        self._coverage_threshold = coverage_threshold
         self._active_goal: Optional[_ActiveGoal] = None
         self._exploration_active = False
         self._exploration_blacklist: list[Pose2D] = []
         self._empty_frontier_cycles = 0
         self._frontier_goal_sequence = 0
+        self._exploration_coverage = 0.0
         self._pending_map_save: Optional[PendingMapSave] = None
         self._map_save_in_progress: Optional[PendingMapSave] = None
 
@@ -94,6 +109,10 @@ class NavigationSupervisor:
     @property
     def exploration_active(self) -> bool:
         return self._exploration_active
+
+    @property
+    def exploration_coverage(self) -> float:
+        return self._exploration_coverage
 
     @property
     def pending_map_save(self) -> Optional[PendingMapSave]:
@@ -194,7 +213,8 @@ class NavigationSupervisor:
         if self._active_goal is None:
             return None
 
-        if current_time - self._active_goal.started_at <= self._navigation_timeout:
+        goal_timeout = self._active_goal.timeout
+        if current_time - self._active_goal.started_at <= goal_timeout:
             return None
 
         active_goal = self._active_goal
@@ -209,7 +229,7 @@ class NavigationSupervisor:
                 message=(
                     "Exploration goal '{}' timed out after {:.1f}s. "
                     "Blacklisted the frontier and stopping before replanning."
-                ).format(active_goal.waypoint.name, self._navigation_timeout),
+                ).format(active_goal.waypoint.name, goal_timeout),
                 actions=(
                     SupervisorAction(
                         action_type=ActionType.STOP,
@@ -223,7 +243,7 @@ class NavigationSupervisor:
             message=(
                 "Navigation to '{}' timed out after {:.1f}s.".format(
                     active_goal.waypoint.name,
-                    self._navigation_timeout,
+                    goal_timeout,
                 )
             ),
             actions=(
@@ -248,30 +268,57 @@ class NavigationSupervisor:
         if current_pose is None or occupancy_grid is None:
             return None
 
+        self._exploration_coverage = compute_coverage(occupancy_grid)
+
         frontier_goal = select_frontier_goal(
             occupancy_grid,
             robot_pose=current_pose,
             blacklist_points=tuple(self._exploration_blacklist),
+            params=self._frontier_params,
         )
         if frontier_goal is None:
             self._empty_frontier_cycles += 1
-            if self._empty_frontier_cycles < 3:
+
+            # Coverage-based early termination.
+            coverage_met = (
+                self._coverage_threshold > 0.0
+                and self._exploration_coverage >= self._coverage_threshold
+            )
+            cycle_limit_met = (
+                self._empty_frontier_cycles >= self._empty_cycle_threshold
+            )
+
+            if not coverage_met and not cycle_limit_met:
                 return CommandResponse(
                     accepted=True,
                     message=(
-                        "No valid frontier found ({}/3). Waiting for more map updates."
-                    ).format(self._empty_frontier_cycles),
+                        "No valid frontier found ({}/{}). "
+                        "Coverage {:.1f}%. Waiting for more map updates."
+                    ).format(
+                        self._empty_frontier_cycles,
+                        self._empty_cycle_threshold,
+                        self._exploration_coverage * 100.0,
+                    ),
                 )
 
             self._exploration_active = False
             pending_save = self._build_pending_map_save()
             self._pending_map_save = pending_save
+            reason = (
+                "coverage {:.1f}% reached threshold".format(
+                    self._exploration_coverage * 100.0
+                )
+                if coverage_met
+                else "{} consecutive empty frontier cycles".format(
+                    self._empty_cycle_threshold
+                )
+            )
             return CommandResponse(
                 accepted=True,
                 message=(
-                    "No valid frontier found for 3 consecutive cycles. "
-                    "Exploration complete; stopping to save the map to '{}'."
-                ).format(pending_save.path),
+                    "Exploration complete ({}). "
+                    "Stopping to save the map to '{}'."
+                ).format(reason, pending_save.path),
                 actions=(
                     SupervisorAction(
                         action_type=ActionType.STOP,
@@ -289,9 +336,13 @@ class NavigationSupervisor:
             pose=target_pose,
             created_at=self._timestamp_factory(),
         )
+        adaptive_timeout = self._compute_adaptive_timeout(
+            frontier_goal.distance_to_robot
+        )
         self._active_goal = _ActiveGoal(
             waypoint=waypoint,
             started_at=self._clock(),
+            timeout=adaptive_timeout,
             is_exploration=True,
             frontier_reference_pose=frontier_goal.reference_pose,
             frontier_cells=frontier_goal.cluster.cells,
@@ -433,6 +484,7 @@ class NavigationSupervisor:
         self._active_goal = _ActiveGoal(
             waypoint=waypoint,
             started_at=self._clock(),
+            timeout=self._navigation_timeout,
         )
         return CommandResponse(
             accepted=True,
@@ -677,6 +729,13 @@ class NavigationSupervisor:
 
     def _blacklist_frontier(self, pose: Pose2D) -> None:
         self._exploration_blacklist.append(Pose2D(x=pose.x, y=pose.y, yaw=0.0))
+
+    def _compute_adaptive_timeout(self, distance: float) -> float:
+        """Return a timeout proportional to the goal distance."""
+        if self._expected_speed <= 0.0:
+            return self._base_timeout
+        travel_estimate = distance / self._expected_speed * self._timeout_safety_factor
+        return max(self._base_timeout, travel_estimate)
 
     def _build_pending_map_save(self) -> PendingMapSave:
         map_id = self._map_save_stem_factory()

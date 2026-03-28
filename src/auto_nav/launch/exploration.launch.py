@@ -21,6 +21,14 @@ def generate_launch_description():
     nav2_params_file = LaunchConfiguration("nav2_params_file")
     slam_params_file = LaunchConfiguration("slam_params_file")
 
+    # Frontier / exploration tuning.
+    info_gain_weight = LaunchConfiguration("info_gain_weight")
+    base_timeout = LaunchConfiguration("base_timeout")
+    expected_speed = LaunchConfiguration("expected_speed")
+    timeout_safety_factor = LaunchConfiguration("timeout_safety_factor")
+    coverage_threshold = LaunchConfiguration("coverage_threshold")
+    empty_cycle_threshold = LaunchConfiguration("empty_cycle_threshold")
+
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_sim_time", default_value="false"),
@@ -44,6 +52,13 @@ def generate_launch_description():
                     "slam_mapping.yaml",
                 ),
             ),
+            # Frontier / exploration tuning arguments.
+            DeclareLaunchArgument("info_gain_weight", default_value="0.3"),
+            DeclareLaunchArgument("base_timeout", default_value="15.0"),
+            DeclareLaunchArgument("expected_speed", default_value="0.12"),
+            DeclareLaunchArgument("timeout_safety_factor", default_value="2.5"),
+            DeclareLaunchArgument("coverage_threshold", default_value="0.0"),
+            DeclareLaunchArgument("empty_cycle_threshold", default_value="3"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(guido_share, "launch", "guido_lidar.launch.py")
@@ -99,6 +114,12 @@ def generate_launch_description():
                         "waypoint_file": waypoint_file,
                         "map_output_dir": map_output_dir,
                         "use_sim_time": use_sim_time,
+                        "info_gain_weight": info_gain_weight,
+                        "base_timeout": base_timeout,
+                        "expected_speed": expected_speed,
+                        "timeout_safety_factor": timeout_safety_factor,
+                        "coverage_threshold": coverage_threshold,
+                        "empty_cycle_threshold": empty_cycle_threshold,
                     }
                 ],
             ),

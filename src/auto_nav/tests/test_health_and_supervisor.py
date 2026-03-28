@@ -373,6 +373,8 @@ def test_exploration_timeout_blacklists_frontier_and_stops_before_replanning(tmp
         mode="exploration",
         map_output_dir=Path("/tmp/exploration-maps"),
         map_save_stem_factory=lambda: "explore_20260328_180000",
+        base_timeout=10.0,
+        expected_speed=100.0,
     )
     context = CommandContext(
         current_pose=Pose2D(x=1.0, y=6.0, yaw=0.0),
@@ -505,3 +507,139 @@ def test_exploration_completion_saves_map_and_updates_active_map_id(tmp_path):
     assert "active map id set" in save_message
     assert not supervisor.exploration_active
     assert not supervisor.has_active_goal
+
+
+def test_adaptive_timeout_scales_with_distance(tmp_path):
+    clock = FakeClock()
+    monitor = HealthMonitor(
+        scan_timeout=120.0,
+        odom_timeout=120.0,
+        tf_timeout=120.0,
+        clock=clock,
+    )
+    monitor.record_scan()
+    monitor.record_odom()
+    monitor.record_tf()
+    supervisor = NavigationSupervisor(
+        waypoint_store=WaypointStore(tmp_path / "waypoints.yaml"),
+        health_monitor=monitor,
+        active_map_id="live_map",
+        navigation_timeout=10.0,
+        clock=clock,
+        timestamp_factory=lambda: "2026-03-28T18:00:00+00:00",
+        mode="exploration",
+        map_output_dir=Path("/tmp/exploration-maps"),
+        map_save_stem_factory=lambda: "explore_20260328_180000",
+        base_timeout=15.0,
+        expected_speed=0.12,
+        timeout_safety_factor=2.5,
+    )
+    context = CommandContext(
+        current_pose=Pose2D(x=1.0, y=6.0, yaw=0.0),
+        map_available=True,
+        cmd_vel_ready=True,
+    )
+    supervisor.handle_command(parse_nav_command("start_exploration"), context=context)
+    first_goal = supervisor.plan_exploration(
+        current_pose=context.current_pose,
+        occupancy_grid=_exploration_grid(),
+    )
+    assert first_goal is not None and first_goal.accepted
+
+    # The base timeout is 15s. A far frontier (e.g. ~5m) should get
+    # 5.0 / 0.12 * 2.5 = ~104s which is > 15s.
+    # At 15.1s the goal should NOT have timed out (adaptive timeout is longer).
+    clock.advance(15.1)
+    tick_result = supervisor.tick()
+    assert tick_result is None  # Still within adaptive timeout.
+
+    # At 110s it should time out for most distances in the test grid.
+    clock.advance(100.0)
+    tick_result = supervisor.tick()
+    assert tick_result is not None
+    assert "timed out" in tick_result.message
+
+
+def test_coverage_threshold_triggers_immediate_termination(tmp_path):
+    clock = FakeClock()
+    supervisor = NavigationSupervisor(
+        waypoint_store=WaypointStore(tmp_path / "waypoints.yaml"),
+        health_monitor=_healthy_monitor(clock),
+        active_map_id="live_map",
+        navigation_timeout=10.0,
+        clock=clock,
+        timestamp_factory=lambda: "2026-03-28T18:00:00+00:00",
+        mode="exploration",
+        map_output_dir=Path("/tmp/exploration-maps"),
+        map_save_stem_factory=lambda: "explore_20260328_180000",
+        coverage_threshold=0.5,
+        empty_cycle_threshold=10,  # Very high — should not trigger.
+    )
+    context = CommandContext(
+        current_pose=Pose2D(x=1.0, y=6.0, yaw=0.0),
+        map_available=True,
+        cmd_vel_ready=True,
+    )
+    supervisor.handle_command(parse_nav_command("start_exploration"), context=context)
+
+    # Use the no-frontier grid (all free cells → coverage = 1.0 ≥ 0.5 threshold).
+    result = supervisor.plan_exploration(
+        current_pose=context.current_pose,
+        occupancy_grid=_no_frontier_grid(),
+    )
+
+    # Should immediately terminate (coverage met) even though empty cycles = 1 < 10.
+    assert result is not None
+    assert result.accepted
+    assert "Exploration complete" in result.message
+    assert "coverage" in result.message
+    assert not supervisor.exploration_active
+
+
+def test_empty_cycle_threshold_is_configurable(tmp_path):
+    clock = FakeClock()
+    supervisor = NavigationSupervisor(
+        waypoint_store=WaypointStore(tmp_path / "waypoints.yaml"),
+        health_monitor=_healthy_monitor(clock),
+        active_map_id="live_map",
+        navigation_timeout=10.0,
+        clock=clock,
+        timestamp_factory=lambda: "2026-03-28T18:00:00+00:00",
+        mode="exploration",
+        map_output_dir=Path("/tmp/exploration-maps"),
+        map_save_stem_factory=lambda: "explore_20260328_180000",
+        empty_cycle_threshold=5,
+    )
+    context = CommandContext(
+        current_pose=Pose2D(x=1.0, y=6.0, yaw=0.0),
+        map_available=True,
+        cmd_vel_ready=True,
+    )
+    supervisor.handle_command(parse_nav_command("start_exploration"), context=context)
+
+    # 3 empty cycles should NOT terminate (threshold is 5).
+    for _ in range(3):
+        result = supervisor.plan_exploration(
+            current_pose=context.current_pose,
+            occupancy_grid=_no_frontier_grid(),
+        )
+        assert result is not None
+        assert supervisor.exploration_active
+
+    # 4th cycle still active.
+    result = supervisor.plan_exploration(
+        current_pose=context.current_pose,
+        occupancy_grid=_no_frontier_grid(),
+    )
+    assert result is not None
+    assert supervisor.exploration_active
+
+    # 5th cycle should terminate.
+    result = supervisor.plan_exploration(
+        current_pose=context.current_pose,
+        occupancy_grid=_no_frontier_grid(),
+    )
+    assert result is not None
+    assert "Exploration complete" in result.message
+    assert not supervisor.exploration_active
+

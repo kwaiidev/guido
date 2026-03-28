@@ -65,9 +65,11 @@ Visualization Manager:
       Namespaces:
         frontier_blacklist: true
         frontier_clusters: true
+        frontier_coverage: true
         frontier_goal: true
         frontier_goal_line: true
         frontier_reference: true
+        frontier_scores: true
       Topic:
         Depth: 5
         Durability Policy: Volatile

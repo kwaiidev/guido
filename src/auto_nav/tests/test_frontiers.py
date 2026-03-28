@@ -1,9 +1,10 @@
 from navigation.frontiers import (
     extract_frontier_clusters,
+    rank_frontier_goals,
     select_frontier_cluster,
     select_frontier_goal,
 )
-from navigation.types import OccupancyGridSnapshot, Pose2D
+from navigation.types import FrontierParams, OccupancyGridSnapshot, Pose2D
 
 
 def _build_grid(width, height, default=100):
@@ -121,3 +122,114 @@ def test_select_frontier_goal_skips_disconnected_clusters():
     )
 
     assert selected is None
+
+
+def test_information_gain_scores_higher_for_larger_unknown_region():
+    """Cluster adjacent to more unknown cells should have higher info gain."""
+    rows = _build_grid(width=30, height=12, default=-1)  # mostly unknown
+
+    # Cluster A at col=5: small free area + frontier.
+    for row in range(12):
+        for col in range(5):
+            rows[row][col] = 0
+        rows[row][5] = -1
+
+    # Cluster B at col=20: large free area + frontier, less unknown beyond.
+    for row in range(12):
+        for col in range(15, 20):
+            rows[row][col] = 0
+        rows[row][20] = -1
+        # Fill more known space beyond cluster B.
+        for col in range(21, 30):
+            rows[row][col] = 100  # occupied → not unknown
+
+    # Connect clusters via bottom row so both are reachable (up to col 20).
+    for col in range(4, 21):
+        rows[11][col] = 0
+
+    grid = _snapshot(rows)
+    robot_pose = Pose2D(x=1.0, y=6.0, yaw=0.0)
+
+    goals = rank_frontier_goals(
+        grid,
+        robot_pose=robot_pose,
+        params=FrontierParams(info_gain_weight=0.5),
+    )
+    assert len(goals) >= 2
+
+    # Cluster A is at col=5, cluster B at col=20.
+    a_ig = next(g.information_gain for g in goals if g.cluster.cells[0][1] == 5)
+    b_ig = next(g.information_gain for g in goals if g.cluster.cells[0][1] == 20)
+
+    # Cluster A has more unknown cells behind it (-1) vs cluster B (occupied 100).
+    assert a_ig > b_ig
+
+
+def test_rank_with_info_gain_weight_reorders_frontiers():
+    """With high info gain weight, farther cluster with more unknown area ranks first."""
+    rows = _build_grid(width=30, height=12, default=-1)
+
+    # Near cluster at col=5: small free area.
+    for row in range(12):
+        for col in range(5):
+            rows[row][col] = 0
+        rows[row][5] = -1
+
+    # Far cluster at col=20: surrounded by lots of unknown.
+    for row in range(12):
+        for col in range(15, 20):
+            rows[row][col] = 0
+        rows[row][20] = -1
+
+    # Connect via bottom row up to col 20.
+    for col in range(4, 21):
+        rows[11][col] = 0
+
+    # Make Cluster A border mostly occupied (low info gain). leave bottom row 11 free.
+    for row in range(11):
+        for col in range(6, 10):
+            rows[row][col] = 100
+
+    grid = _snapshot(rows)
+    robot_pose = Pose2D(x=1.0, y=6.0, yaw=0.0)
+
+    # Pure distance: cluster A should be first (closer).
+    goals_dist = rank_frontier_goals(
+        grid,
+        robot_pose=robot_pose,
+        params=FrontierParams(info_gain_weight=0.0),
+    )
+    assert len(goals_dist) >= 2
+    assert goals_dist[0].cluster.cells[0][1] == 5  # Cluster A is closer
+
+    # High info gain weight: cluster B should be first (more unknown).
+    goals_ig = rank_frontier_goals(
+        grid,
+        robot_pose=robot_pose,
+        params=FrontierParams(info_gain_weight=0.8),
+    )
+    assert len(goals_ig) >= 2
+    assert goals_ig[0].cluster.cells[0][1] == 20  # Cluster B has more info gain
+
+
+def test_frontier_params_defaults_match_existing_behavior():
+    """Default FrontierParams should produce same results as calling without params."""
+    rows = _build_grid(width=8, height=12, default=100)
+    for row in range(12):
+        for col in range(5):
+            rows[row][col] = 0
+        rows[row][5] = -1
+
+    grid = _snapshot(rows)
+    robot = Pose2D(x=1.0, y=6.0, yaw=0.0)
+
+    goal_no_params = select_frontier_goal(grid, robot_pose=robot)
+    goal_default_params = select_frontier_goal(
+        grid, robot_pose=robot, params=FrontierParams(info_gain_weight=0.0)
+    )
+
+    assert goal_no_params is not None
+    assert goal_default_params is not None
+    assert goal_no_params.target_row == goal_default_params.target_row
+    assert goal_no_params.target_col == goal_default_params.target_col
+

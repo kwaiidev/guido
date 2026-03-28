@@ -141,6 +141,17 @@ class OccupancyGridSnapshot:
         return (row, col)
 
 
+
+@dataclass(frozen=True)
+class FrontierParams:
+    """Tuning knobs for frontier detection and ranking."""
+
+    min_cluster_size: int = 10
+    blacklist_radius: float = 0.5
+    info_gain_weight: float = 0.3
+    info_gain_radius: int = 8
+
+
 @dataclass(frozen=True)
 class PendingMapSave:
     map_id: str

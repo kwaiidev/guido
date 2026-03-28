@@ -17,11 +17,17 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .adapters import CommandBridgeAdapter
-from .frontiers import extract_frontier_clusters, select_frontier_goal
+from .frontiers import extract_frontier_clusters, rank_frontier_goals, select_frontier_goal
 from .health import HealthMonitor
 from .messages import decode_navigation_result, encode_navigation_request
 from .supervisor import NavigationSupervisor
-from .types import CommandContext, OccupancyGridSnapshot, OperatingMode, Pose2D
+from .types import (
+    CommandContext,
+    FrontierParams,
+    OccupancyGridSnapshot,
+    OperatingMode,
+    Pose2D,
+)
 from .waypoints import WaypointStore
 
 _BLACKLIST_RADIUS_METERS = 0.5
@@ -57,6 +63,16 @@ class AutoNavCommandNode(Node):
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("odom_frame", "odom")
+
+        # Frontier / exploration tuning parameters.
+        self.declare_parameter("info_gain_weight", 0.3)
+        self.declare_parameter("info_gain_radius", 8)
+        self.declare_parameter("min_cluster_size", 10)
+        self.declare_parameter("base_timeout", 15.0)
+        self.declare_parameter("expected_speed", 0.12)
+        self.declare_parameter("timeout_safety_factor", 2.5)
+        self.declare_parameter("empty_cycle_threshold", 3)
+        self.declare_parameter("coverage_threshold", 0.0)
         self.declare_parameter("base_frame", "base_link")
 
         self._mode = OperatingMode(str(self.get_parameter("mode").value))
@@ -71,6 +87,14 @@ class AutoNavCommandNode(Node):
             requested_map_id=str(self.get_parameter("active_map_id").value),
             map_file=self._map_file,
         )
+
+        frontier_params = FrontierParams(
+            min_cluster_size=int(self.get_parameter("min_cluster_size").value),
+            blacklist_radius=_BLACKLIST_RADIUS_METERS,
+            info_gain_weight=float(self.get_parameter("info_gain_weight").value),
+            info_gain_radius=int(self.get_parameter("info_gain_radius").value),
+        )
+        self._frontier_params = frontier_params
 
         waypoint_store = WaypointStore(
             Path(str(self.get_parameter("waypoint_file").value)).expanduser()
@@ -87,6 +111,18 @@ class AutoNavCommandNode(Node):
             navigation_timeout=float(self.get_parameter("navigation_timeout").value),
             mode=self._mode.value,
             map_output_dir=Path(str(self.get_parameter("map_output_dir").value)),
+            frontier_params=frontier_params,
+            base_timeout=float(self.get_parameter("base_timeout").value),
+            expected_speed=float(self.get_parameter("expected_speed").value),
+            timeout_safety_factor=float(
+                self.get_parameter("timeout_safety_factor").value
+            ),
+            empty_cycle_threshold=int(
+                self.get_parameter("empty_cycle_threshold").value
+            ),
+            coverage_threshold=float(
+                self.get_parameter("coverage_threshold").value
+            ),
         )
 
         self._health_monitor = health_monitor
@@ -377,6 +413,7 @@ class AutoNavCommandNode(Node):
                 self._latest_map,
                 robot_pose=current_pose,
                 blacklist_points=self._supervisor.exploration_blacklist,
+                params=self._frontier_params,
             )
             if preview_goal is not None:
                 highlighted_cells = preview_goal.cluster.cells
@@ -390,6 +427,17 @@ class AutoNavCommandNode(Node):
                 highlighted_cells=highlighted_cells,
                 stamp=stamp,
             )
+        )
+
+        # Frontier score annotations.
+        ranked_goals = rank_frontier_goals(
+            self._latest_map,
+            robot_pose=current_pose,
+            blacklist_points=self._supervisor.exploration_blacklist,
+            params=self._frontier_params,
+        )
+        markers.markers.extend(
+            self._build_score_markers(ranked_goals=ranked_goals, stamp=stamp)
         )
 
         blacklist_points = self._supervisor.exploration_blacklist
@@ -420,6 +468,15 @@ class AutoNavCommandNode(Node):
                 self._build_goal_line_marker(
                     current_pose=current_pose,
                     goal_pose=selected_goal_pose,
+                    stamp=stamp,
+                )
+            )
+
+        # Coverage text overlay.
+        if self._supervisor.exploration_active:
+            markers.markers.append(
+                self._build_coverage_text_marker(
+                    coverage_pct=self._supervisor.exploration_coverage * 100.0,
                     stamp=stamp,
                 )
             )
@@ -465,6 +522,59 @@ class AutoNavCommandNode(Node):
             markers.append(marker)
 
         return markers
+
+    def _build_score_markers(
+        self,
+        ranked_goals,
+        stamp,
+    ) -> list[Marker]:
+        markers = []
+        for index, goal in enumerate(ranked_goals):
+            marker = Marker()
+            marker.header.frame_id = self._map_frame
+            marker.header.stamp = stamp
+            marker.ns = "frontier_scores"
+            marker.id = 20_000 + index
+            marker.type = Marker.TEXT_VIEW_FACING
+            marker.action = Marker.ADD
+            cx = goal.cluster.centroid_x
+            cy = goal.cluster.centroid_y
+            marker.pose.position = _point(cx, cy, 0.25)
+            marker.pose.orientation.w = 1.0
+            marker.scale.z = 0.18
+            marker.color.r = 1.0
+            marker.color.g = 1.0
+            marker.color.b = 1.0
+            marker.color.a = 0.9
+            marker.text = "d={:.1f} ig={:.0f} s={:.2f}".format(
+                goal.distance_to_robot,
+                goal.information_gain,
+                goal.score,
+            )
+            markers.append(marker)
+        return markers
+
+    def _build_coverage_text_marker(
+        self,
+        coverage_pct: float,
+        stamp,
+    ) -> Marker:
+        marker = Marker()
+        marker.header.frame_id = self._map_frame
+        marker.header.stamp = stamp
+        marker.ns = "frontier_coverage"
+        marker.id = 10_100
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.action = Marker.ADD
+        marker.pose.position = _point(0.0, 0.0, 1.5)
+        marker.pose.orientation.w = 1.0
+        marker.scale.z = 0.35
+        marker.color.r = 0.2
+        marker.color.g = 0.9
+        marker.color.b = 0.4
+        marker.color.a = 0.95
+        marker.text = "Coverage: {:.1f}%".format(coverage_pct)
+        return marker
 
     def _build_blacklist_marker(self, blacklist_points, stamp) -> Marker:
         marker = Marker()
