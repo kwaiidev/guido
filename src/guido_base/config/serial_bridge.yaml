@@ -1,0 +1,9 @@
+guido_serial_bridge:
+  ros__parameters:
+    serial_port: '/dev/ttyUSB1'
+    baudrate: 115200
+    wheel_base: 0.17
+    max_wheel_vel: 0.5
+    cmd_timeout_sec: 0.5
+    odom_frame: 'odom'
+    base_frame: 'base_footprint'
