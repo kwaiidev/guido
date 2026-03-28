@@ -17,6 +17,8 @@ guido/
 |- scripts/
 |  |- install_ros2_jazzy.sh   # ROS 2 Jazzy installer (Ubuntu 24.04 / JP6)
 |  |- setup_lidar.sh          # workspace deps + LiDAR udev rules + build
+|  |- voice_stream.py         # microphone -> stdout speech transcription
+|  |- requirements-voice.txt  # Python deps for voice_stream.py
 |  `- guido_git_steward.sh    # helper for repo maintenance
 |- agents/
 |  `- guido_mission_agent/    # existing minimal ADK app entrypoint
@@ -171,6 +173,85 @@ ros2 run tf2_tools view_frames
 ```
 
 Expected chain: `base_footprint -> base_link -> ldlidar_base -> ldlidar_link`
+
+## Voice Transcription Utility
+
+`scripts/voice_stream.py` is a standalone terminal transcription utility. It captures microphone audio from the local machine, performs continuous speech-to-text with Vosk, writes transcript lines to stdout, and keeps logs on stderr so it can be piped into another process later.
+
+### Install voice dependencies
+
+Install the audio runtime and Python packages:
+
+```bash
+sudo apt install portaudio19-dev unzip
+python3 -m pip install -r scripts/requirements-voice.txt
+```
+
+For a fully offline local model, download and unpack a Vosk model. Example for the small US English model:
+
+```bash
+mkdir -p models
+curl -L -o /tmp/vosk-model-small-en-us-0.15.zip \
+  https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip -q /tmp/vosk-model-small-en-us-0.15.zip -d models
+```
+
+This creates a model directory like `models/vosk-model-small-en-us-0.15`.
+
+### Run the voice stream
+
+Plain text, one finalized utterance per line:
+
+```bash
+python3 scripts/voice_stream.py --model models/vosk-model-small-en-us-0.15
+```
+
+List microphone devices first if needed:
+
+```bash
+python3 scripts/voice_stream.py --list-devices
+```
+
+Select a specific device or sample rate:
+
+```bash
+python3 scripts/voice_stream.py \
+  --model models/vosk-model-small-en-us-0.15 \
+  --device 2 \
+  --samplerate 16000
+```
+
+Emit partial hypotheses too:
+
+```bash
+python3 scripts/voice_stream.py \
+  --model models/vosk-model-small-en-us-0.15 \
+  --partials
+```
+
+Emit JSONL for downstream consumers:
+
+```bash
+python3 scripts/voice_stream.py \
+  --model models/vosk-model-small-en-us-0.15 \
+  --jsonl \
+  --timestamps
+```
+
+Pipe transcript output into another process:
+
+```bash
+python3 scripts/voice_stream.py --model models/vosk-model-small-en-us-0.15 | some_other_process
+```
+
+If you omit `--model`, the script can try `--language en-us`, but passing `--model` is the recommended path for predictable offline operation.
+
+### Linux microphone notes
+
+- Use `--list-devices` if the default input is not the microphone you want.
+- On Jetson or headless Ubuntu systems, a USB microphone is usually the simplest option.
+- If the stream cannot open, verify the device appears in ALSA or PulseAudio and that the requested sample rate is supported.
+- Startup logs and audio warnings go to stderr by design, so stdout stays pipe-friendly.
 
 ## Configuration
 

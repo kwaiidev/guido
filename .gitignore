@@ -13,6 +13,10 @@ __pycache__/
 *.swp
 *.swo
 
+# Local voice-transcription testing artifacts
+.venv/
+models/
+
 # OS
 .DS_Store
 Thumbs.db
