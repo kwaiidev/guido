@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#  Post-ROS2-install setup: udev rules, rosdep, colcon build
-#  Run from the workspace root:  ./scripts/setup_lidar.sh
+#  Post-ROS2-install setup: device rules, rosdep, colcon build
+#  Run from the workspace root: ./scripts/setup_lidar.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_DIR="$(dirname "$SCRIPT_DIR")"
@@ -13,13 +13,20 @@ if [ -z "${ROS_DISTRO:-}" ]; then
 fi
 
 echo "============================================"
-echo " Guido LiDAR setup  (workspace: $WS_DIR)"
+echo " Guido workspace setup  (workspace: $WS_DIR)"
 echo "============================================"
 
 echo ""
 echo "[1/4] Installing system dependencies..."
 sudo apt-get update -qq
-sudo apt-get install -y libudev-dev
+sudo apt-get install -y \
+  libudev-dev \
+  python3-serial
+
+if ! id -nG "$USER" | grep -qw dialout; then
+  sudo usermod -a -G dialout "$USER"
+  echo "  -> Added $USER to dialout. Log out and back in for serial access."
+fi
 
 echo ""
 echo "[2/4] Installing udev rules for LDLidar..."
@@ -58,6 +65,9 @@ echo ""
 echo " Source the workspace:"
 echo "   source $SETUP_FILE"
 echo ""
-echo " Launch the lidar:"
+echo " Launch base control:"
+echo "   ros2 launch guido_bringup guido_base.launch.py"
+echo ""
+echo " Launch the full stack:"
 echo "   ros2 launch guido_bringup guido_lidar.launch.py"
 echo "============================================"
