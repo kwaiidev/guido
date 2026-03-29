@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Quick checks that Nav2 can drive the base: cmd_vel, odometry, map TF.
+# Run while frontier_mapping (or slam_nav) is up; start a navigation goal first
+# to see non-zero cmd_vel.
+
+set -euo pipefail
+
+echo "=== /cmd_vel (wait up to 4s for one message) ==="
+if timeout 4 ros2 topic echo /cmd_vel --once 2>/dev/null; then
+  :
+else
+  echo "(no cmd_vel — twist_mux may be idle or Nav2 not commanding)"
+fi
+
+echo ""
+echo "=== /odom (rate sample, max 5s) ==="
+timeout 5 ros2 topic hz /odom -w 5 2>/dev/null || echo "(no /odom)"
+
+echo ""
+echo "=== /odometry/filtered (EKF; skip if not used) ==="
+if timeout 2 ros2 topic echo /odometry/filtered --once 2>/dev/null; then
+  :
+else
+  echo "(not publishing — expected if EKF not running)"
+fi
+
+echo ""
+echo "=== TF map -> base_footprint (5 samples, 2s) ==="
+timeout 2 ros2 run tf2_ros tf2_echo map base_footprint 2>/dev/null | head -n 40 || true
+
+echo ""
+echo "Done."

@@ -37,6 +37,10 @@ e / c     : increase / decrease angular speed
 p         : save waypoint at current position
 l         : list saved waypoints
 CTRL-C    : quit
+
+For stacks that use twist_mux (e.g. slam_nav), set cmd_topic to /cmd_vel_teleop
+so teleop does not fight Nav2 on /cmd_vel. Frontier mapping uses a direct
+cmd_vel bridge; default /cmd_vel matches serial_bridge like slam_teleop.
 """
 
 

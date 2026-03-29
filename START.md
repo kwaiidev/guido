@@ -38,4 +38,6 @@ In Terminal 2 you approve each frontier before the robot moves:
 - **c** -- cancel the current navigation
 - **s** -- save map and quit
 
+Optional third terminal (manual nudge while frontier runs): publishes to the same `/cmd_vel` as Nav2; press **c** in the explorer first to avoid fighting the controller.
+
 Map is saved to `~/guido/maps/frontier_map.pgm` / `.yaml`.

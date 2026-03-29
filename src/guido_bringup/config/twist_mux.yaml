@@ -3,7 +3,7 @@ twist_mux:
     topics:
       navigation:
         topic: /cmd_vel_nav
-        timeout: 0.5
+        timeout: 1.5
         priority: 10
       teleop:
         topic: /cmd_vel_teleop

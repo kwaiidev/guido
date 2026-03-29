@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import deque
 from enum import Enum, auto
+from functools import partial
 import math
 import os
 import random
@@ -42,6 +43,9 @@ Frontier = Tuple[float, float, int]
 _NEIGHBORS_4 = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 _NEIGHBORS_8 = _NEIGHBORS_4 + [(-1, -1), (-1, 1), (1, -1), (1, 1)]
 
+# Ignore stale async preview callbacks (wrong generation, state, or frontier).
+_PREVIEW_XY_EPS = 0.02
+
 _HELP = """\
 Frontier Explorer
 -----------------
@@ -69,6 +73,10 @@ class FrontierExplorer(Node):
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('map_save_path',
                                os.path.expanduser('~/guido/maps/frontier_map'))
+        self.declare_parameter('goal_retreat_m', 0.3)
+        self.declare_parameter('goal_snap_radius_m', 1.0)
+        # Must exceed Nav2 xy_goal_tolerance + SLAM jitter; re-clamped in _send_goal.
+        self.declare_parameter('min_goal_dist_from_robot_m', 0.55)
 
         self._min_frontier_size = int(self.get_parameter('min_frontier_size').value)
         self._blacklist_radius = float(self.get_parameter('blacklist_radius').value)
@@ -79,16 +87,23 @@ class FrontierExplorer(Node):
         self._base_frame = str(self.get_parameter('base_frame').value)
         self._map_save_path = str(self.get_parameter('map_save_path').value)
 
+        self._goal_retreat_m = float(self.get_parameter('goal_retreat_m').value)
+        self._goal_snap_radius_m = float(self.get_parameter('goal_snap_radius_m').value)
+        self._min_goal_dist_from_robot_m = float(
+            self.get_parameter('min_goal_dist_from_robot_m').value)
+
         self._map: Optional[OccupancyGrid] = None
         self._state = _State.DETECTING
         self._blacklist: List[Tuple[float, float]] = []
         self._proposal: Optional[Frontier] = None
+        self._selected_centroid: Optional[Tuple[float, float]] = None
         self._all_frontiers: List[Frontier] = []
         self._goal_handle = None
         self._printed_waiting_for_map = False
         self._detect_after = time.monotonic() + nav2_startup_delay
         self._last_marker_time = 0.0
         self._reject_count = 0
+        self._preview_gen = 0
 
         self.create_subscription(OccupancyGrid, '/map', self._on_map, 10)
         self._marker_pub = self.create_publisher(
@@ -122,6 +137,7 @@ class FrontierExplorer(Node):
     def _enter_detecting(self, cooldown: Optional[float] = None):
         self._state = _State.DETECTING
         self._proposal = None
+        self._selected_centroid = None
         self._clear_preview_path()
         cd = cooldown if cooldown is not None else self._detect_cooldown
         self._detect_after = time.monotonic() + cd
@@ -191,6 +207,108 @@ class FrontierExplorer(Node):
             return None
         return random.choice(candidates)
 
+    def _world_xy_to_rc(self, x: float, y: float) -> Optional[Tuple[int, int]]:
+        if self._map is None:
+            return None
+        ox = float(self._map.info.origin.position.x)
+        oy = float(self._map.info.origin.position.y)
+        res = float(self._map.info.resolution)
+        c = int((x - ox) / res)
+        r = int((y - oy) / res)
+        return (r, c)
+
+    def _snap_to_known_free(self, cx: float, cy: float) -> Tuple[float, float]:
+        """Nudge goal onto a known-free /map cell near the target."""
+        if self._map is None:
+            return (cx, cy)
+        data = self._map.data
+        w, h = int(self._map.info.width), int(self._map.info.height)
+        res = float(self._map.info.resolution)
+        ox = float(self._map.info.origin.position.x)
+        oy = float(self._map.info.origin.position.y)
+        rc = self._world_xy_to_rc(cx, cy)
+        if rc is None:
+            return (cx, cy)
+        r0, c0 = rc
+        if 0 <= r0 < h and 0 <= c0 < w and data[r0 * w + c0] == 0:
+            return (cx, cy)
+        rad = max(2, int(self._goal_snap_radius_m / res))
+        best: Optional[Tuple[int, int]] = None
+        best_d2: Optional[float] = None
+        for r in range(max(0, r0 - rad), min(h, r0 + rad + 1)):
+            row_off = r * w
+            for c in range(max(0, c0 - rad), min(w, c0 + rad + 1)):
+                if data[row_off + c] != 0:
+                    continue
+                d2 = float((r - r0) ** 2 + (c - c0) ** 2)
+                if best_d2 is None or d2 < best_d2:
+                    best = (r, c)
+                    best_d2 = d2
+        if best is None:
+            return (cx, cy)
+        r, c = best
+        return (ox + (c + 0.5) * res, oy + (r + 0.5) * res)
+
+    def _adjust_goal_toward_robot(
+        self, cx: float, cy: float, robot_xy: Tuple[float, float],
+    ) -> Tuple[float, float]:
+        """Pull centroid toward the robot so Nav2 goals sit deeper in free space."""
+        rx, ry = robot_xy
+        dx, dy = cx - rx, cy - ry
+        d = math.hypot(dx, dy)
+        if d < 1e-6:
+            return (cx, cy)
+        mind = self._min_goal_dist_from_robot_m
+        retreat = min(self._goal_retreat_m, d * 0.4)
+        if d - retreat < mind:
+            retreat = max(0.0, d - mind)
+        s = retreat / d
+        return (cx - dx * s, cy - dy * s)
+
+    def _push_goal_outward(
+        self, gx: float, gy: float, robot_xy: Tuple[float, float],
+        toward_xy: Tuple[float, float],
+    ) -> Tuple[float, float]:
+        """If goal is too close to base, move it along robot->frontier direction."""
+        rx, ry = robot_xy
+        mind = self._min_goal_dist_from_robot_m
+        dx, dy = gx - rx, gy - ry
+        d = math.hypot(dx, dy)
+        if d >= mind:
+            return (gx, gy)
+        fdx, fdy = toward_xy[0] - rx, toward_xy[1] - ry
+        fd = math.hypot(fdx, fdy)
+        if fd > 1e-6:
+            ux, uy = fdx / fd, fdy / fd
+        elif d > 1e-6:
+            ux, uy = dx / d, dy / d
+        else:
+            return (gx, gy)
+        return (rx + ux * mind, ry + uy * mind)
+
+    def _clamp_goal_for_nav2(self, x: float, y: float) -> Tuple[float, float]:
+        """Re-apply min distance using current TF (SLAM can move pose before 'y')."""
+        robot_xy = self._get_robot_xy()
+        if robot_xy is None:
+            return (x, y)
+        rx, ry = robot_xy
+        mind = self._min_goal_dist_from_robot_m
+        dx, dy = x - rx, y - ry
+        d = math.hypot(dx, dy)
+        if d >= mind:
+            return (x, y)
+        ref = self._selected_centroid if self._selected_centroid is not None else (x, y)
+        fdx, fdy = ref[0] - rx, ref[1] - ry
+        fd = math.hypot(fdx, fdy)
+        if fd > 1e-6:
+            ux, uy = fdx / fd, fdy / fd
+        elif d > 1e-6:
+            ux, uy = dx / d, dy / d
+        else:
+            ux, uy = 1.0, 0.0
+        return (rx + ux * mind, ry + uy * mind)
+
+
     # -- RViz markers -----------------------------------------------------
 
     def _publish_markers(self):
@@ -207,9 +325,10 @@ class FrontierExplorer(Node):
         delete.action = Marker.DELETEALL
         msg.markers.append(delete)
         for i, (cx, cy, size) in enumerate(self._all_frontiers):
-            is_selected = (self._proposal is not None
-                           and cx == self._proposal[0]
-                           and cy == self._proposal[1])
+            is_selected = (
+                self._selected_centroid is not None
+                and math.hypot(cx - self._selected_centroid[0],
+                               cy - self._selected_centroid[1]) < 0.02)
             blacklisted = self._is_blacklisted(cx, cy)
 
             sphere = Marker()
@@ -277,24 +396,43 @@ class FrontierExplorer(Node):
         goal.goal.pose.orientation.w = 1.0
         goal.use_start = False
 
+        self._preview_gen += 1
+        gen = self._preview_gen
         future = self._path_client.send_goal_async(goal)
-        future.add_done_callback(self._on_preview_goal_response)
+        future.add_done_callback(
+            partial(self._on_preview_goal_response, gen=gen, tx=x, ty=y))
 
-    def _on_preview_goal_response(self, future):
+    def _on_preview_goal_response(
+            self, future, gen: int, tx: float, ty: float):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().warn('Planner rejected preview path request')
             return
         result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._on_preview_result)
+        result_future.add_done_callback(
+            partial(self._on_preview_result, gen=gen, tx=tx, ty=ty))
 
-    def _on_preview_result(self, future):
+    def _on_preview_result(self, future, gen: int, tx: float, ty: float):
+        if gen != self._preview_gen:
+            return
+        if self._state != _State.WAITING_APPROVAL:
+            return
+        if self._proposal is None:
+            return
+        cx, cy, _ = self._proposal
+        if (abs(cx - tx) > _PREVIEW_XY_EPS
+                or abs(cy - ty) > _PREVIEW_XY_EPS):
+            return
+
         result = future.result()
         if result.status == GoalStatus.STATUS_SUCCEEDED:
             self._preview_path_pub.publish(result.result.path)
             self.get_logger().info('Preview path published')
         else:
             self.get_logger().warn('Preview path computation failed')
+            self._blacklist.append((cx, cy))
+            print('  No valid path to frontier — auto-blacklisting.')
+            self._enter_detecting(cooldown=0.5)
 
     # -- Nav2 action ------------------------------------------------------
 
@@ -304,6 +442,8 @@ class FrontierExplorer(Node):
             print('  Nav2 action server not available. Retrying...')
             self._enter_detecting(cooldown=3.0)
             return
+
+        x, y = self._clamp_goal_for_nav2(x, y)
 
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = self._map_frame
@@ -437,6 +577,16 @@ class FrontierExplorer(Node):
 
         self._all_frontiers = self._detect_frontiers()
         self._proposal = self._select_frontier(self._all_frontiers, robot_xy)
+
+        if self._proposal is not None:
+            pcx, pcy, psz = self._proposal
+            self._selected_centroid = (pcx, pcy)
+            ax, ay = self._adjust_goal_toward_robot(pcx, pcy, robot_xy)
+            sx, sy = self._snap_to_known_free(ax, ay)
+            sx, sy = self._push_goal_outward(sx, sy, robot_xy, (pcx, pcy))
+            sx, sy = self._snap_to_known_free(sx, sy)
+            sx, sy = self._push_goal_outward(sx, sy, robot_xy, (pcx, pcy))
+            self._proposal = (sx, sy, psz)
 
         if self._proposal is None:
             if self._blacklist:
