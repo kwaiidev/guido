@@ -7,17 +7,24 @@ slam_toolbox:
     base_frame: base_footprint
     scan_topic: /ldlidar_node/scan
     resolution: 0.05
-    max_laser_range: 12.0
+    # Filter out returns closer than 15cm (robot body, wheel reflections)
+    # and beyond 6m (unnecessary in typical indoor rooms).
+    minimum_laser_range: 0.15
+    max_laser_range: 6.0
     minimum_time_interval: 0.5
     transform_publish_period: 0.05
-    map_update_interval: 5.0
-    throttle_scans: 5
+    map_update_interval: 3.0
+    # Only accept a scan when the robot has physically moved, prevents
+    # accumulating noise from stationary jitter.
+    throttle_scans: 3
     enable_interactive_mode: false
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.05
-    minimum_travel_heading: 0.05
+    minimum_travel_distance: 0.15
+    minimum_travel_heading: 0.1
     loop_search_maximum_distance: 3.0
-    loop_match_minimum_chain_size: 6
-    distance_variance_penalty: 0.5
-    angle_variance_penalty: 1.0
+    # Require a longer chain of matching scans before committing a loop
+    # closure — reduces false closures from sparse early maps.
+    loop_match_minimum_chain_size: 10
+    distance_variance_penalty: 0.3
+    angle_variance_penalty: 0.8

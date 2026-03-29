@@ -1,7 +1,9 @@
 """Frontier-based autonomous exploration with human approval.
 
 Detects unexplored map regions, proposes goals via RViz markers,
-waits for terminal y/n approval, then drives via Nav2.
+waits for terminal y/n approval, then drives directly via cmd_vel.
+Uses SLAM TF for position/heading, lidar for obstacle avoidance,
+and IMU angular velocity for smooth heading control.
 """
 
 from __future__ import annotations
@@ -21,12 +23,14 @@ import tty
 from typing import List, Optional, Tuple
 
 from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Path
-from nav2_msgs.action import ComputePathToPose, NavigateToPose
+from nav2_msgs.action import ComputePathToPose
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
+from sensor_msgs.msg import Imu, LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -34,7 +38,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 class _State(Enum):
     DETECTING = auto()
     WAITING_APPROVAL = auto()
-    NAVIGATING = auto()
+    DRIVING = auto()
     COMPLETE = auto()
 
 
@@ -53,10 +57,20 @@ Detects unexplored map regions and proposes navigation goals.
 
   y   approve proposed frontier
   n   skip (blacklist) proposed frontier
+  a   toggle auto-approve mode (fully autonomous exploration)
   c   cancel current navigation
   s   save map & quit
   CTRL-C  quit without saving
 """
+
+
+def _normalize_angle(a: float) -> float:
+    """Wrap angle to [-pi, pi]."""
+    while a > math.pi:
+        a -= 2.0 * math.pi
+    while a < -math.pi:
+        a += 2.0 * math.pi
+    return a
 
 
 class FrontierExplorer(Node):
@@ -75,8 +89,18 @@ class FrontierExplorer(Node):
                                os.path.expanduser('~/guido/maps/frontier_map'))
         self.declare_parameter('goal_retreat_m', 0.3)
         self.declare_parameter('goal_snap_radius_m', 1.0)
-        # Must exceed Nav2 xy_goal_tolerance + SLAM jitter; re-clamped in _send_goal.
         self.declare_parameter('min_goal_dist_from_robot_m', 0.55)
+
+        self.declare_parameter('direct_cmd_topic', '/cmd_vel')
+        self.declare_parameter('drive_linear_speed',  0.5)
+        self.declare_parameter('drive_angular_kp',    2.0)
+        self.declare_parameter('drive_angular_kd',    0.3)
+        self.declare_parameter('drive_max_angular',   6.0)
+        self.declare_parameter('drive_goal_tol_m',    0.20)
+        self.declare_parameter('drive_heading_tol',   0.25)
+        self.declare_parameter('obstacle_stop_m',     0.25)
+        self.declare_parameter('obstacle_slow_m',     0.50)
+        self.declare_parameter('obstacle_sector_deg', 25.0)
 
         self._min_frontier_size = int(self.get_parameter('min_frontier_size').value)
         self._blacklist_radius = float(self.get_parameter('blacklist_radius').value)
@@ -92,28 +116,45 @@ class FrontierExplorer(Node):
         self._min_goal_dist_from_robot_m = float(
             self.get_parameter('min_goal_dist_from_robot_m').value)
 
+        self._drive_linear_speed = float(self.get_parameter('drive_linear_speed').value)
+        self._drive_angular_kp   = float(self.get_parameter('drive_angular_kp').value)
+        self._drive_angular_kd   = float(self.get_parameter('drive_angular_kd').value)
+        self._drive_max_angular  = float(self.get_parameter('drive_max_angular').value)
+        self._drive_goal_tol     = float(self.get_parameter('drive_goal_tol_m').value)
+        self._drive_heading_tol  = float(self.get_parameter('drive_heading_tol').value)
+        self._obstacle_stop      = float(self.get_parameter('obstacle_stop_m').value)
+        self._obstacle_slow      = float(self.get_parameter('obstacle_slow_m').value)
+        self._obstacle_sector    = math.radians(
+            float(self.get_parameter('obstacle_sector_deg').value))
+
         self._map: Optional[OccupancyGrid] = None
         self._state = _State.DETECTING
         self._blacklist: List[Tuple[float, float]] = []
         self._proposal: Optional[Frontier] = None
         self._selected_centroid: Optional[Tuple[float, float]] = None
         self._all_frontiers: List[Frontier] = []
-        self._goal_handle = None
+        self._drive_goal: Optional[Tuple[float, float]] = None
+        self._auto_mode = False
+        self._scan: Optional[LaserScan] = None
+        self._imu: Optional[Imu] = None
+        self._drive_dist_last: Optional[float] = None
         self._printed_waiting_for_map = False
         self._detect_after = time.monotonic() + nav2_startup_delay
         self._last_marker_time = 0.0
-        self._reject_count = 0
         self._preview_gen = 0
 
         self.create_subscription(OccupancyGrid, '/map', self._on_map, 10)
+        self.create_subscription(LaserScan, '/ldlidar_node/scan', self._on_scan, 10)
+        self.create_subscription(Imu, '/imu/data_raw', self._on_imu, 10)
         self._marker_pub = self.create_publisher(
             MarkerArray, '/explorer/frontiers', 10)
         self._preview_path_pub = self.create_publisher(
             Path, '/explorer/preview_path', 10)
-        self._nav_client = ActionClient(
-            self, NavigateToPose, '/navigate_to_pose')
         self._path_client = ActionClient(
             self, ComputePathToPose, '/compute_path_to_pose')
+
+        direct_cmd_topic = str(self.get_parameter('direct_cmd_topic').value)
+        self._cmd_vel_pub = self.create_publisher(Twist, direct_cmd_topic, 1)
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -123,7 +164,18 @@ class FrontierExplorer(Node):
     def _on_map(self, msg: OccupancyGrid):
         self._map = msg
 
-    # -- Helpers ----------------------------------------------------------
+    def _on_scan(self, msg: LaserScan):
+        self._scan = msg
+
+    def _on_imu(self, msg: Imu):
+        self._imu = msg
+
+    # -- Pose helpers -----------------------------------------------------
+
+    def _quat_to_yaw(self, qx: float, qy: float, qz: float, qw: float) -> float:
+        """Extract yaw (rotation about Z) from a quaternion."""
+        return math.atan2(2.0 * (qw * qz + qx * qy),
+                          1.0 - 2.0 * (qy * qy + qz * qz))
 
     def _get_robot_xy(self) -> Optional[Tuple[float, float]]:
         try:
@@ -134,13 +186,134 @@ class FrontierExplorer(Node):
         except TransformException:
             return None
 
+    def _get_robot_pose(self) -> Optional[Tuple[float, float, float]]:
+        """Return (x, y, yaw) in the map frame, or None if TF unavailable."""
+        try:
+            t = self._tf_buffer.lookup_transform(
+                self._map_frame, self._base_frame,
+                rclpy.time.Time(), timeout=Duration(seconds=0.5))
+            x = t.transform.translation.x
+            y = t.transform.translation.y
+            q = t.transform.rotation
+            yaw = self._quat_to_yaw(q.x, q.y, q.z, q.w)
+            return (x, y, yaw)
+        except TransformException:
+            return None
+
     def _enter_detecting(self, cooldown: Optional[float] = None):
         self._state = _State.DETECTING
         self._proposal = None
         self._selected_centroid = None
+        self._drive_goal = None
         self._clear_preview_path()
         cd = cooldown if cooldown is not None else self._detect_cooldown
         self._detect_after = time.monotonic() + cd
+
+    # -- Motor control ----------------------------------------------------
+
+    def _stop_motors(self):
+        self._cmd_vel_pub.publish(Twist())
+
+    def _start_direct_drive(self, x: float, y: float):
+        """Transition to DRIVING state and begin the direct-drive loop."""
+        self._drive_goal = (x, y)
+        self._drive_dist_last = None
+        self._state = _State.DRIVING
+        self.get_logger().info(f'Direct-driving to ({x:.2f}, {y:.2f})')
+
+    def _nearest_obstacle_front(self) -> float:
+        """Return the nearest obstacle distance within the front ±sector arc.
+
+        The lidar faces forward, so angle 0 is the robot's forward direction.
+        We scan all rays within ±obstacle_sector_deg of 0 and return the
+        shortest valid range.
+        """
+        if self._scan is None:
+            return float('inf')
+        scan = self._scan
+        min_dist = float('inf')
+        for i, r in enumerate(scan.ranges):
+            if not math.isfinite(r) or r < scan.range_min or r > scan.range_max:
+                continue
+            angle = _normalize_angle(scan.angle_min + i * scan.angle_increment)
+            if abs(angle) <= self._obstacle_sector:
+                min_dist = min(min_dist, r)
+        return min_dist
+
+    def _drive_tick(self):
+        """Direct proportional heading + distance controller.
+
+        Called at tick_hz while DRIVING.  Uses:
+          - TF map->base_footprint for position and yaw (SLAM + EKF)
+          - Lidar scan for front-sector obstacle detection
+          - IMU angular_velocity.z as derivative damping on turns
+        Publishes Twist directly to cmd_vel -> serial_bridge -> Arduino -> motors.
+        """
+        if self._drive_goal is None:
+            self._stop_motors()
+            self._enter_detecting()
+            return
+
+        pose = self._get_robot_pose()
+        if pose is None:
+            self.get_logger().warn('TF unavailable during drive — stopping.')
+            self._stop_motors()
+            return
+
+        rx, ry, robot_yaw = pose
+        gx, gy = self._drive_goal
+        dx, dy = gx - rx, gy - ry
+        dist = math.hypot(dx, dy)
+
+        # --- Arrival check ---
+        if dist < self._drive_goal_tol:
+            self.get_logger().info('Arrived at frontier.')
+            print(f'\n  Arrived at ({gx:.2f}, {gy:.2f}). Re-detecting...')
+            self._stop_motors()
+            self._enter_detecting()
+            return
+
+        # --- Lidar obstacle check (front sector) ---
+        obstacle_dist = self._nearest_obstacle_front()
+        if obstacle_dist < self._obstacle_stop:
+            self.get_logger().warn(
+                f'Obstacle at {obstacle_dist:.2f}m — stopping, blacklisting frontier.')
+            self._stop_motors()
+            self._blacklist.append(self._drive_goal)
+            self._enter_detecting(cooldown=1.0)
+            return
+
+        # --- Heading error with IMU derivative damping ---
+        target_yaw = math.atan2(dy, dx)
+        err_yaw = _normalize_angle(target_yaw - robot_yaw)
+        imu_z = self._imu.angular_velocity.z if self._imu is not None else 0.0
+        angular_z = self._drive_angular_kp * err_yaw - self._drive_angular_kd * imu_z
+        angular_z = max(-self._drive_max_angular,
+                        min(self._drive_max_angular, angular_z))
+
+        cmd = Twist()
+        if abs(err_yaw) > self._drive_heading_tol:
+            # Rotate in place until facing the goal
+            cmd.angular.z = angular_z
+        else:
+            # Drive forward; slow down as obstacles get closer
+            raw_scale = ((obstacle_dist - self._obstacle_stop)
+                         / max(self._obstacle_slow - self._obstacle_stop, 1e-6))
+            speed_scale = max(0.0, min(1.0, raw_scale))
+            cmd.linear.x = self._drive_linear_speed * speed_scale
+            cmd.angular.z = angular_z * 0.4  # light correction while moving
+
+        self._cmd_vel_pub.publish(cmd)
+
+        # Print progress when distance changes meaningfully
+        if self._drive_dist_last is None or abs(dist - self._drive_dist_last) > 0.05:
+            self._drive_dist_last = dist
+            obs_str = (f'{obstacle_dist:.2f}m' if math.isfinite(obstacle_dist)
+                       else 'clear')
+            print(f'\r  Driving to ({gx:.2f}, {gy:.2f}) | '
+                  f'dist={dist:.2f}m  obs={obs_str}  '
+                  f'yaw_err={math.degrees(err_yaw):.0f}°',
+                  end='', flush=True)
 
     # -- Frontier detection -----------------------------------------------
 
@@ -252,7 +425,7 @@ class FrontierExplorer(Node):
     def _adjust_goal_toward_robot(
         self, cx: float, cy: float, robot_xy: Tuple[float, float],
     ) -> Tuple[float, float]:
-        """Pull centroid toward the robot so Nav2 goals sit deeper in free space."""
+        """Pull centroid toward the robot so the goal sits deeper in free space."""
         rx, ry = robot_xy
         dx, dy = cx - rx, cy - ry
         d = math.hypot(dx, dy)
@@ -285,29 +458,6 @@ class FrontierExplorer(Node):
         else:
             return (gx, gy)
         return (rx + ux * mind, ry + uy * mind)
-
-    def _clamp_goal_for_nav2(self, x: float, y: float) -> Tuple[float, float]:
-        """Re-apply min distance using current TF (SLAM can move pose before 'y')."""
-        robot_xy = self._get_robot_xy()
-        if robot_xy is None:
-            return (x, y)
-        rx, ry = robot_xy
-        mind = self._min_goal_dist_from_robot_m
-        dx, dy = x - rx, y - ry
-        d = math.hypot(dx, dy)
-        if d >= mind:
-            return (x, y)
-        ref = self._selected_centroid if self._selected_centroid is not None else (x, y)
-        fdx, fdy = ref[0] - rx, ref[1] - ry
-        fd = math.hypot(fdx, fdy)
-        if fd > 1e-6:
-            ux, uy = fdx / fd, fdy / fd
-        elif d > 1e-6:
-            ux, uy = dx / d, dy / d
-        else:
-            ux, uy = 1.0, 0.0
-        return (rx + ux * mind, ry + uy * mind)
-
 
     # -- RViz markers -----------------------------------------------------
 
@@ -434,75 +584,6 @@ class FrontierExplorer(Node):
             print('  No valid path to frontier — auto-blacklisting.')
             self._enter_detecting(cooldown=0.5)
 
-    # -- Nav2 action ------------------------------------------------------
-
-    def _send_goal(self, x: float, y: float):
-        if not self._nav_client.wait_for_server(timeout_sec=2.0):
-            self.get_logger().error('Nav2 action server not available')
-            print('  Nav2 action server not available. Retrying...')
-            self._enter_detecting(cooldown=3.0)
-            return
-
-        x, y = self._clamp_goal_for_nav2(x, y)
-
-        goal = NavigateToPose.Goal()
-        goal.pose.header.frame_id = self._map_frame
-        goal.pose.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.pose.position.x = x
-        goal.pose.pose.position.y = y
-        goal.pose.pose.orientation.w = 1.0
-
-        self.get_logger().info(f'Sending Nav2 goal ({x:.2f}, {y:.2f})')
-        future = self._nav_client.send_goal_async(goal)
-        future.add_done_callback(self._on_goal_response)
-
-    def _on_goal_response(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self._reject_count += 1
-            self.get_logger().warn(
-                f'Nav2 rejected goal (attempt {self._reject_count})')
-            if self._reject_count >= 3:
-                print(f'  Nav2 rejected goal {self._reject_count} times. '
-                      f'Blacklisting frontier.')
-                if self._proposal:
-                    self._blacklist.append(
-                        (self._proposal[0], self._proposal[1]))
-                self._reject_count = 0
-                self._enter_detecting()
-            else:
-                print(f'  Nav2 rejected goal (attempt {self._reject_count}/3). '
-                      f'Nav2 may still be starting. Retrying in 5s...')
-                self._enter_detecting(cooldown=5.0)
-            return
-
-        self._reject_count = 0
-        self._goal_handle = goal_handle
-        self.get_logger().info('Nav2 accepted goal, navigating...')
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._on_nav_result)
-
-    def _on_nav_result(self, future):
-        self._goal_handle = None
-        result = future.result()
-        if result.status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info('Reached frontier!')
-            print('\n  Reached frontier. Re-detecting...')
-        elif result.status == GoalStatus.STATUS_CANCELED:
-            self.get_logger().info('Navigation canceled.')
-            print('\n  Navigation canceled.')
-        else:
-            self.get_logger().warn(f'Navigation failed (status {result.status})')
-            print(f'\n  Navigation failed (status {result.status}). Blacklisting.')
-            if self._proposal:
-                self._blacklist.append((self._proposal[0], self._proposal[1]))
-        self._enter_detecting()
-
-    def _cancel_goal(self):
-        if self._goal_handle is not None:
-            self._goal_handle.cancel_goal_async()
-            self.get_logger().info('Cancelling Nav2 goal')
-
     # -- Map saving -------------------------------------------------------
 
     def _save_map(self):
@@ -524,18 +605,29 @@ class FrontierExplorer(Node):
 
     def _handle_key(self, key: str):
         if key == 's':
-            if self._state == _State.NAVIGATING:
-                self._cancel_goal()
+            if self._state == _State.DRIVING:
+                self._stop_motors()
             self._save_map()
             raise KeyboardInterrupt
 
+        if key == 'a':
+            self._auto_mode = not self._auto_mode
+            mode_str = 'ON  (press a again to stop)' if self._auto_mode else 'OFF'
+            print(f'\n  Auto-approve mode: {mode_str}')
+            if (self._auto_mode and self._state == _State.WAITING_APPROVAL
+                    and self._proposal is not None):
+                cx, cy, _ = self._proposal
+                print(f'  Auto-approving: ({cx:.2f}, {cy:.2f})...')
+                self._clear_preview_path()
+                self._start_direct_drive(cx, cy)
+            return
+
         if self._state == _State.WAITING_APPROVAL:
             if key == 'y' and self._proposal is not None:
-                cx, cy, size = self._proposal
-                print(f'  Approved! Navigating to ({cx:.2f}, {cy:.2f})...')
+                cx, cy, _ = self._proposal
+                print(f'  Approved! Driving to ({cx:.2f}, {cy:.2f})...')
                 self._clear_preview_path()
-                self._state = _State.NAVIGATING
-                self._send_goal(cx, cy)
+                self._start_direct_drive(cx, cy)
             elif key == 'n':
                 if self._proposal:
                     self._blacklist.append(
@@ -543,15 +635,20 @@ class FrontierExplorer(Node):
                     print('  Skipped. Blacklisting frontier.')
                 self._enter_detecting(cooldown=0.5)
 
-        elif self._state == _State.NAVIGATING:
+        elif self._state == _State.DRIVING:
             if key == 'c':
-                self._cancel_goal()
                 print('  Cancelling navigation...')
+                self._stop_motors()
+                self._enter_detecting(cooldown=0.5)
 
     # -- Main loop --------------------------------------------------------
 
     def _tick(self):
         self._publish_markers()
+
+        if self._state == _State.DRIVING:
+            self._drive_tick()
+            return
 
         if self._state != _State.DETECTING:
             return
@@ -608,10 +705,14 @@ class FrontierExplorer(Node):
         print(f'\n  {n_total} frontier(s) found, {n_ok} available.')
         print(f'  Proposed: ({cx:.2f}, {cy:.2f})  '
               f'dist={dist:.1f}m  size={size} cells')
-        print('  [y] approve  [n] skip  [s] save map & quit')
-        self._state = _State.WAITING_APPROVAL
-        self._last_marker_time = 0.0  # force immediate marker publish
-        self._compute_preview_path(cx, cy)
+        if self._auto_mode:
+            print('  [AUTO] Driving...')
+            self._start_direct_drive(cx, cy)
+        else:
+            print('  [y] approve  [n] skip  [a] auto  [s] save map & quit')
+            self._state = _State.WAITING_APPROVAL
+            self._last_marker_time = 0.0  # force immediate marker publish
+            self._compute_preview_path(cx, cy)
 
     def run(self):
         settings = termios.tcgetattr(sys.stdin)
@@ -630,6 +731,7 @@ class FrontierExplorer(Node):
                 self._tick()
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+            self._stop_motors()
 
 
 def main(args=None):

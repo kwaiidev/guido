@@ -1,6 +1,7 @@
 """Keyboard teleop with waypoint saving and RViz marker publishing."""
 
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 import select
 import sys
@@ -23,6 +24,8 @@ except ImportError:
 
 WAYPOINT_DIR = Path.home() / '.guido'
 WAYPOINT_FILE = WAYPOINT_DIR / 'waypoints.yaml'
+# Matches auto_nav command_node default map id when no static map is loaded.
+_LIVE_MAP_ID = 'live_map'
 
 HELP = """\
 Guido keyboard teleop
@@ -57,13 +60,58 @@ def _load_waypoints() -> list:
         data = json.loads(raw)
     if not isinstance(data, dict):
         return []
-    wps = data.get('waypoints', [])
-    return wps if isinstance(wps, list) else []
+    section = data.get('waypoints', [])
+    if isinstance(section, list):
+        return section
+    if not isinstance(section, dict):
+        return []
+    wps = []
+    for key in sorted(section.keys()):
+        rec = section[key]
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get('name', key))
+        pose = rec.get('pose')
+        if isinstance(pose, dict) and all(k in pose for k in ('x', 'y', 'yaw')):
+            wps.append({
+                'name': name,
+                'x': float(pose['x']),
+                'y': float(pose['y']),
+                'yaw': float(pose['yaw']),
+                'map_id': rec.get('map_id', _LIVE_MAP_ID),
+                'created_at': rec.get('created_at', ''),
+            })
+        elif all(k in rec for k in ('x', 'y', 'yaw')):
+            wps.append({
+                'name': name,
+                'x': float(rec['x']),
+                'y': float(rec['y']),
+                'yaw': float(rec['yaw']),
+                'map_id': rec.get('map_id', _LIVE_MAP_ID),
+                'created_at': rec.get('created_at', ''),
+            })
+    return wps
 
 
 def _save_waypoints(waypoints: list) -> None:
     WAYPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    data = {'waypoints': waypoints}
+    records = {}
+    for wp in waypoints:
+        name = str(wp['name'])
+        ts = wp.get('created_at') or ''
+        if not ts:
+            ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        records[name] = {
+            'name': name,
+            'map_id': str(wp.get('map_id', _LIVE_MAP_ID)),
+            'pose': {
+                'x': float(wp['x']),
+                'y': float(wp['y']),
+                'yaw': float(wp['yaw']),
+            },
+            'created_at': str(ts),
+        }
+    data = {'waypoints': records}
     if yaml is not None:
         text = yaml.safe_dump(data, sort_keys=False)
     else:
@@ -82,8 +130,8 @@ class KeyboardTeleop(Node):
     def __init__(self):
         super().__init__('guido_keyboard_teleop')
 
-        self.declare_parameter('linear_speed', 0.15)
-        self.declare_parameter('angular_speed', 1.0)
+        self.declare_parameter('linear_speed', 0.5)
+        self.declare_parameter('angular_speed', 6.0)
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('cmd_topic', '/cmd_vel')
         self.declare_parameter('map_frame', 'map')

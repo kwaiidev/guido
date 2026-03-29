@@ -14,7 +14,7 @@ def generate_launch_description():
     slam_config = os.path.join(auto_nav_share, 'config', 'slam_toolbox.yaml')
     nav2_config = os.path.join(auto_nav_share, 'config', 'nav2.yaml')
     twist_mux_config = os.path.join(guido_bringup_share, 'config', 'twist_mux.yaml')
-    waypoint_file = os.path.join(os.getcwd(), '.guido', 'waypoints.yaml')
+    waypoint_file = os.path.join(os.path.expanduser('~'), '.guido', 'waypoints.yaml')
 
     base_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(

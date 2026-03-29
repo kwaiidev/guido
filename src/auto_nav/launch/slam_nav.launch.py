@@ -14,8 +14,10 @@ def generate_launch_description():
 
     slam_config = os.path.join(auto_nav_share, 'config', 'slam_toolbox.yaml')
     nav2_config = os.path.join(auto_nav_share, 'config', 'nav2.yaml')
+    rviz_config = os.path.join(auto_nav_share, 'config', 'frontier_mapping.rviz')
     twist_mux_config = os.path.join(guido_bringup_share, 'config', 'twist_mux.yaml')
-    waypoint_file = os.path.join(os.getcwd(), '.guido', 'waypoints.yaml')
+    # Match keyboard_teleop (~/.guido/waypoints.yaml).
+    waypoint_file = os.path.join(os.path.expanduser('~'), '.guido', 'waypoints.yaml')
 
     base_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -90,6 +92,14 @@ def generate_launch_description():
         output='screen',
     )
 
+    rviz2 = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', rviz_config],
+    )
+
     return LaunchDescription(
         [
             base_stack,
@@ -100,5 +110,6 @@ def generate_launch_description():
             TimerAction(period=12.0, actions=[map_saver_lifecycle_manager]),
             auto_nav_command,
             auto_nav_navigation,
+            rviz2,
         ]
     )

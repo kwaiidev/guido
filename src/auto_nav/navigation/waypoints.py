@@ -15,6 +15,46 @@ except ImportError:  # pragma: no cover - depends on system packages
 
 from navigation.types import Waypoint
 
+# Default map_id for SLAM/live sessions (matches command_node when map_file is unset).
+_LIVE_MAP_ID = 'live_map'
+
+
+def coerce_waypoints_section(raw: object) -> Dict[str, Dict[str, object]]:
+    """Normalize YAML ``waypoints`` entry to name -> record dict.
+
+    Accepts the canonical dict format or a legacy list of
+    ``{name, x, y, yaw}`` entries (as written by keyboard_teleop).
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, list):
+        return {}
+    out: Dict[str, Dict[str, object]] = {}
+    for item in raw:
+        if not isinstance(item, dict) or 'name' not in item:
+            continue
+        name = str(item['name'])
+        pose_rec = item.get('pose')
+        if isinstance(pose_rec, dict) and all(k in pose_rec for k in ('x', 'y', 'yaw')):
+            x = float(pose_rec['x'])
+            y = float(pose_rec['y'])
+            yaw = float(pose_rec['yaw'])
+        elif all(k in item for k in ('x', 'y', 'yaw')):
+            x = float(item['x'])
+            y = float(item['y'])
+            yaw = float(item['yaw'])
+        else:
+            continue
+        out[name] = {
+            'name': name,
+            'map_id': str(item.get('map_id', _LIVE_MAP_ID)),
+            'pose': {'x': x, 'y': y, 'yaw': yaw},
+            'created_at': str(item.get('created_at', '')),
+        }
+    return out
+
 
 class DuplicateWaypointError(ValueError):
     """Raised when a waypoint name already exists."""
@@ -58,9 +98,8 @@ class WaypointStore:
 
     def save_waypoint(self, waypoint: Waypoint, overwrite: bool = False) -> Waypoint:
         data = self._load_data()
-        records = data.setdefault('waypoints', {})
-        if not isinstance(records, dict):
-            raise ValueError("Waypoint store 'waypoints' section must be a mapping.")
+        records = coerce_waypoints_section(data.get('waypoints'))
+        data['waypoints'] = records
         if waypoint.name in records and not overwrite:
             raise DuplicateWaypointError(f"Waypoint '{waypoint.name}' already exists.")
         records[waypoint.name] = waypoint.as_record()
@@ -69,12 +108,7 @@ class WaypointStore:
 
     def _load_records(self) -> Dict[str, Dict[str, object]]:
         data = self._load_data()
-        records = data.get('waypoints', {})
-        if records is None:
-            return {}
-        if not isinstance(records, dict):
-            raise ValueError("Waypoint store 'waypoints' section must be a mapping.")
-        return records
+        return coerce_waypoints_section(data.get('waypoints'))
 
     def _load_data(self) -> Dict[str, object]:
         if not self._path.exists():
