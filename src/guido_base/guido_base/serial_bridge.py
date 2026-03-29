@@ -149,10 +149,16 @@ class SerialBridge(Node):
             self._write_serial('STOP\n')
 
     def _serial_read_loop(self):
+        backoff = 1.0
+        _MAX_BACKOFF = 30.0
         while rclpy.ok():
             if self._serial is None or not self._serial.is_open:
-                time.sleep(1.0)
+                time.sleep(backoff)
                 self._connect_serial()
+                if self._serial is None:
+                    backoff = min(backoff * 2, _MAX_BACKOFF)
+                else:
+                    backoff = 1.0
                 continue
 
             try:
@@ -160,6 +166,9 @@ class SerialBridge(Node):
             except serial.SerialException as exc:
                 self.get_logger().warning(f'Serial read error: {exc}')
                 self._serial = None
+                backoff = 2.0
+                continue
+            if not raw:
                 continue
 
             if raw.startswith('ODOM '):

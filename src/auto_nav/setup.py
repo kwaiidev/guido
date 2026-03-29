@@ -32,6 +32,7 @@ setup(
             [
                 os.path.join('bin', 'auto_nav_command_node'),
                 os.path.join('bin', 'auto_nav_navigation_node'),
+                os.path.join('bin', 'frontier_explorer'),
             ],
         ),
     ],
