@@ -17,5 +17,3 @@
       range_min: 0.03
       range_max: 15.0
       enable_angle_crop: false
-      angle_crop_min: 0.0
-      angle_crop_max: 6.2831853
