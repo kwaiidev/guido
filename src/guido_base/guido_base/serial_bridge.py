@@ -76,10 +76,10 @@ class SerialBridge(Node):
         self._serial = None
         self._connect_serial()
 
-        self._odom_pub = self.create_publisher(Odometry, self._odom_topic, 10)
-        self._imu_pub = self.create_publisher(Imu, self._imu_topic, 20)
+        self._odom_pub = self.create_publisher(Odometry, self._odom_topic, 2)
+        self._imu_pub = self.create_publisher(Imu, self._imu_topic, 2)
         self._tf_broadcaster = TransformBroadcaster(self)
-        self._cmd_sub = self.create_subscription(Twist, self._cmd_topic, self._cmd_vel_cb, 10)
+        self._cmd_sub = self.create_subscription(Twist, self._cmd_topic, self._cmd_vel_cb, 1)
 
         self._last_cmd_time = self.get_clock().now()
         self._watchdog_timer = self.create_timer(0.1, self._watchdog_cb)

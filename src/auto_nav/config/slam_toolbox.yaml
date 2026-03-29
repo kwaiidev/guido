@@ -8,10 +8,10 @@ slam_toolbox:
     scan_topic: /ldlidar_node/scan
     resolution: 0.05
     max_laser_range: 12.0
-    minimum_time_interval: 0.25
+    minimum_time_interval: 0.5
     transform_publish_period: 0.05
-    map_update_interval: 2.0
-    throttle_scans: 1
+    map_update_interval: 5.0
+    throttle_scans: 5
     enable_interactive_mode: false
     use_scan_matching: true
     use_scan_barycenter: true

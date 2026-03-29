@@ -41,7 +41,7 @@ class KeyboardTeleop(Node):
         self._publish_rate_hz = float(self.get_parameter('publish_rate_hz').value)
         self._cmd_topic = str(self.get_parameter('cmd_topic').value)
 
-        self._pub = self.create_publisher(Twist, self._cmd_topic, 10)
+        self._pub = self.create_publisher(Twist, self._cmd_topic, 1)
         self._current = Twist()
 
     def _print_status(self):
