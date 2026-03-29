@@ -54,8 +54,6 @@ DIRECT_ROS_COMMANDS = {
     "emergency stop": "stop",
 }
 
-ALIAS_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = []
-
 
 def eprint(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
@@ -65,30 +63,10 @@ def load_adk_components():
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
 
-    from agents.guido_mission_agent.agent import MISSION_STATE
-    from agents.guido_mission_agent.agent import WAYPOINTS
+    from agents.guido_mission_agent.agent import consume_pending_ros_command
     from agents.guido_mission_agent.agent import root_agent
 
-    return Runner, InMemorySessionService, MISSION_STATE, WAYPOINTS, root_agent
-
-
-def build_alias_replacements(waypoints: dict[str, Any]) -> list[tuple[re.Pattern[str], str]]:
-    replacements: list[tuple[re.Pattern[str], str]] = []
-    seen_aliases: set[str] = set()
-
-    for destination_id, payload in waypoints.items():
-        aliases = payload.get("aliases", [])
-        for alias in aliases:
-            alias_key = alias.strip().lower()
-            if " " not in alias_key or alias_key in seen_aliases:
-                continue
-            seen_aliases.add(alias_key)
-            replacements.append(
-                (re.compile(rf"\b{re.escape(alias_key)}\b", flags=re.IGNORECASE), destination_id)
-            )
-
-    replacements.sort(key=lambda item: len(item[0].pattern), reverse=True)
-    return replacements
+    return Runner, InMemorySessionService, consume_pending_ros_command, root_agent
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -214,9 +192,6 @@ def normalize_transcript(text: str) -> str:
     for pattern, replacement in COMMAND_REWRITES:
         normalized = re.sub(pattern, replacement, normalized)
 
-    for pattern, destination_id in ALIAS_REPLACEMENTS:
-        normalized = pattern.sub(destination_id, normalized)
-
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
 
@@ -269,23 +244,6 @@ def direct_ros_command_for_transcript(transcript: str) -> str | None:
     return DIRECT_ROS_COMMANDS.get(transcript)
 
 
-def build_ros_command_from_mission_state(mission_state: dict[str, Any] | None) -> str | None:
-    if not mission_state:
-        return None
-
-    if mission_state.get("status") == "stopped":
-        return "stop"
-
-    mission = mission_state.get("active_mission") or {}
-    if mission.get("mission_type") != "waypoint_goal":
-        return None
-
-    goal_id = str(mission.get("goal_id") or "").strip()
-    if not goal_id:
-        return None
-    return f"navigate_to {goal_id}"
-
-
 def create_ros_command_publisher(topic: str, node_name: str):
     try:
         import rclpy
@@ -328,10 +286,10 @@ async def main(argv: list[str] | None = None) -> int:
 
     runner = None
     root_agent_name = None
-    mission_state = None
+    consume_pending_ros_command = None
     if not args.dry_run and "GOOGLE_API_KEY" in os.environ:
         try:
-            Runner, InMemorySessionService, mission_state, waypoints, root_agent = (
+            Runner, InMemorySessionService, consume_pending_ros_command, root_agent = (
                 load_adk_components()
             )
         except Exception as exc:
@@ -348,8 +306,6 @@ async def main(argv: list[str] | None = None) -> int:
             )
             eprint(f"details: {exc}")
         else:
-            global ALIAS_REPLACEMENTS
-            ALIAS_REPLACEMENTS = build_alias_replacements(waypoints)
             root_agent_name = root_agent.name
             runner = Runner(
                 app_name=root_agent.name,
@@ -441,8 +397,8 @@ async def main(argv: list[str] | None = None) -> int:
             return True
 
         last_request_at = time.monotonic()
-        if ros_context is not None:
-            ros_command = build_ros_command_from_mission_state(mission_state)
+        if ros_context is not None and consume_pending_ros_command is not None:
+            ros_command = consume_pending_ros_command()
             if ros_command is not None:
                 publish_ros_command(ros_context, ros_command)
         print(" ".join(reply.split()), flush=True)

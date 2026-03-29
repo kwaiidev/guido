@@ -30,6 +30,7 @@ setup(
             'trajectory_controller = guido_navigation.trajectory_controller:main',
             'command_mux = guido_navigation.command_mux:main',
             'safety_monitor = guido_navigation.safety_monitor:main',
+            'telemetry_bridge = guido_navigation.telemetry_bridge:main',
         ],
     },
 )

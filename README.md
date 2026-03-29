@@ -36,7 +36,7 @@ ROS 2 wheelchair bringup and autonomous navigation stack for a Jetson + Arduino 
 
 1. `scripts/voice_stream.py` converts microphone audio to transcript lines
 2. `scripts/adk_transcript_bridge.py` normalizes transcripts and optionally:
-   - uses Google ADK for destination resolution
+   - uses Google ADK to resolve live saved waypoint names
    - publishes safe commands into `/auto_nav/command`
 3. The voice stack never publishes raw motor commands
 
@@ -50,7 +50,8 @@ ROS 2 wheelchair bringup and autonomous navigation stack for a Jetson + Arduino 
 | `src/auto_nav` | Reconstructed | Waypoint supervisor, ROS bridge nodes, launch/config, tests |
 | `scripts/voice_stream.py` | Implemented | Offline Vosk or ElevenLabs STT |
 | `scripts/adk_transcript_bridge.py` | Extended | Can now publish safe ROS commands |
-| `agents/guido_mission_agent` | Partial | ADK waypoint resolution only, still no Google Maps |
+| `agents/guido_mission_agent` | Implemented | ADK now reads the live `auto_nav` waypoint store and queues safe ROS waypoint commands |
+| `frontend/guido-live-view` | Implemented | React + Tailwind live operations surface for map, path, pose, scan, and saved places |
 | `src/ldrobot-lidar-ros2` | Missing in this checkout | Must initialize the git submodule before LiDAR bringup works |
 
 What is still not present in the repo:
@@ -71,6 +72,7 @@ guido/
 |- scripts/
 |  |- adk_transcript_bridge.py
 |  |- install_ros2_humble.sh
+|  |- requirements-adk.txt
 |  |- setup_lidar.sh
 |  |- voice_stream.py
 |  `- requirements-voice.txt
@@ -286,8 +288,14 @@ python3 -m pip install -r scripts/requirements-voice.txt
 Additional dependency split:
 
 - `scripts/requirements-voice.txt` covers speech-to-text support only
-- Google ADK Python dependencies are still required if you want spoken destination resolution instead of direct ROS-safe commands
+- `scripts/requirements-adk.txt` installs the Google ADK dependency used for waypoint memory and resolution
 - `rclpy` comes from the ROS 2 installation and is required for `--ros-command-topic`
+
+Install ADK:
+
+```bash
+python3 -m pip install -r scripts/requirements-adk.txt
+```
 
 Run offline STT:
 
@@ -319,11 +327,42 @@ Direct ROS-safe commands supported by the bridge:
 
 ADK-resolved waypoint commands published into ROS:
 
-- `navigate_to <goal_id>`
+- `save_waypoint <name>`
+- `navigate_to <name>`
+- `stop`
+- `cancel_navigation`
 
-Important limitation:
+Examples:
 
-- The ADK bridge can only publish waypoint names that exist in the recovered ADK mission agent. Those names still need to match saved `auto_nav` waypoint names if you want Nav2 to accept them cleanly.
+- `remember this as charging dock`
+- `go back to room 2`
+- `take me to charging dock`
+
+The ADK bridge now resolves against the live `auto_nav` waypoint file instead of a hardcoded agent-side list. By default it reads `.guido/waypoints.yaml` under the repository root, and you can override that with `GUIDO_WAYPOINT_FILE=/path/to/waypoints.yaml`.
+
+### Frontend live view
+
+Start the telemetry bridge:
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/local_setup.bash
+ros2 launch guido_bringup guido_frontend_bridge.launch.py
+```
+
+Then run the React frontend:
+
+```bash
+cd frontend/guido-live-view
+npm install
+npm run dev
+```
+
+The frontend polls `http://localhost:8765/api/state` and `http://localhost:8765/api/map` by default. Override the bridge host with:
+
+```bash
+VITE_TELEMETRY_BASE=http://<jetson-ip>:8765 npm run dev
+```
 
 ## How Robot Motion Works
 
@@ -561,7 +600,7 @@ Navigation to a waypoint is rejected if scan / odom / TF health is stale. Saving
 Likely causes:
 
 - `GOOGLE_API_KEY` is not set, so ADK cannot resolve destination phrases
-- the ADK waypoint name does not match a saved `auto_nav` waypoint
+- the waypoint has not been saved yet in the active `.guido/waypoints.yaml`
 - `--ros-command-topic /auto_nav/command` was not passed
 
 ## Remaining Unknowns
