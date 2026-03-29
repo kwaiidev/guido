@@ -1,0 +1,26 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.7
+      Class: rviz_default_plugins/Map
+      Enabled: true
+      Name: Map
+      Topic:
+        Value: /map
+    - Alpha: 1
+      Class: rviz_default_plugins/LaserScan
+      Enabled: true
+      Name: Scan
+      Topic:
+        Value: /ldlidar_node/scan
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Frontiers
+      Topic:
+        Value: /auto_nav/frontier_markers
+  Enabled: true
+  Global Options:
+    Fixed Frame: map

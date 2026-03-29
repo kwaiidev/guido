@@ -21,7 +21,8 @@ echo "[1/4] Installing system dependencies..."
 sudo apt-get update -qq
 sudo apt-get install -y \
   libudev-dev \
-  python3-serial
+  python3-serial \
+  python3-yaml
 
 if ! id -nG "$USER" | grep -qw dialout; then
   sudo usermod -a -G dialout "$USER"
@@ -70,4 +71,10 @@ echo "   ros2 launch guido_bringup guido_base.launch.py"
 echo ""
 echo " Launch the full stack:"
 echo "   ros2 launch guido_bringup guido_lidar.launch.py"
+echo ""
+echo " Launch mapping + Nav2:"
+echo "   ros2 launch auto_nav navigation.launch.py"
+echo ""
+echo " Launch autonomous exploration:"
+echo "   ros2 launch auto_nav exploration.launch.py"
 echo "============================================"

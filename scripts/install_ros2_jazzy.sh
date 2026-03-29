@@ -41,7 +41,10 @@ rosdep update --rosdistro jazzy
 echo "Installing LDLidar dependencies..."
 apt-get install -y \
   libudev-dev \
+  ros-jazzy-navigation2 \
+  ros-jazzy-nav2-bringup \
   ros-jazzy-nav2-lifecycle-manager \
+  ros-jazzy-nav2-map-server \
   ros-jazzy-nav2-util \
   ros-jazzy-nav2-msgs \
   ros-jazzy-robot-state-publisher \

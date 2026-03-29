@@ -27,11 +27,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-
-from agents.guido_mission_agent.agent import WAYPOINTS, root_agent
-
 DEFAULT_MIN_INTERVAL_SECONDS = 12.5
 DEFAULT_DEDUPE_WINDOW_SECONDS = 2.0
 DEFAULT_USER_ID = "voice_stream_user"
@@ -50,17 +45,42 @@ COMMAND_REWRITES = (
     (r"\bwhat is my status\b", "what's my status"),
 )
 TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+DIRECT_ROS_COMMANDS = {
+    "start exploration": "start_exploration",
+    "start exploring": "start_exploration",
+    "explore": "start_exploration",
+    "begin exploration": "start_exploration",
+    "cancel": "cancel_navigation",
+    "cancel navigation": "cancel_navigation",
+    "cancel mission": "cancel_navigation",
+    "stop": "stop",
+    "halt": "stop",
+    "emergency stop": "stop",
+}
+
+ALIAS_REPLACEMENTS: list[tuple[re.Pattern[str], str]] = []
 
 
 def eprint(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def build_alias_replacements() -> list[tuple[re.Pattern[str], str]]:
+def load_adk_components():
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    from agents.guido_mission_agent.agent import MISSION_STATE
+    from agents.guido_mission_agent.agent import WAYPOINTS
+    from agents.guido_mission_agent.agent import root_agent
+
+    return Runner, InMemorySessionService, MISSION_STATE, WAYPOINTS, root_agent
+
+
+def build_alias_replacements(waypoints: dict[str, Any]) -> list[tuple[re.Pattern[str], str]]:
     replacements: list[tuple[re.Pattern[str], str]] = []
     seen_aliases: set[str] = set()
 
-    for destination_id, payload in WAYPOINTS.items():
+    for destination_id, payload in waypoints.items():
         aliases = payload.get("aliases", [])
         for alias in aliases:
             alias_key = alias.strip().lower()
@@ -73,9 +93,6 @@ def build_alias_replacements() -> list[tuple[re.Pattern[str], str]]:
 
     replacements.sort(key=lambda item: len(item[0].pattern), reverse=True)
     return replacements
-
-
-ALIAS_REPLACEMENTS = build_alias_replacements()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -115,6 +132,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--session-id",
         default=DEFAULT_SESSION_ID,
         help="ADK session id for this transcript session.",
+    )
+    parser.add_argument(
+        "--ros-command-topic",
+        help="Optional ROS topic to publish safe auto_nav text commands onto.",
+    )
+    parser.add_argument(
+        "--ros-node-name",
+        default="adk_ros_command_bridge",
+        help="ROS node name used when --ros-command-topic is enabled.",
     )
     return parser.parse_args(argv)
 
@@ -212,11 +238,12 @@ def extract_text(parts: list[Any] | None) -> str:
 
 
 async def invoke_agent(
-    runner: Runner,
+    runner: Any,
     *,
     transcript: str,
     user_id: str,
     session_id: str,
+    root_agent_name: str,
 ) -> str:
     events = await runner.run_debug(
         transcript,
@@ -230,7 +257,7 @@ async def invoke_agent(
         text = extract_text(getattr(content, "parts", None))
         if not text:
             continue
-        if getattr(event, "author", "") == root_agent.name and event.is_final_response():
+        if getattr(event, "author", "") == root_agent_name and event.is_final_response():
             return text
 
     for event in reversed(events):
@@ -242,18 +269,105 @@ async def invoke_agent(
     return "No assistant response was returned."
 
 
+def direct_ros_command_for_transcript(transcript: str) -> str | None:
+    return DIRECT_ROS_COMMANDS.get(transcript)
+
+
+def build_ros_command_from_mission_state(mission_state: dict[str, Any] | None) -> str | None:
+    if not mission_state:
+        return None
+
+    if mission_state.get("status") == "stopped":
+        return "stop"
+
+    mission = mission_state.get("active_mission") or {}
+    if mission.get("mission_type") != "waypoint_goal":
+        return None
+
+    goal_id = str(mission.get("goal_id") or "").strip()
+    if not goal_id:
+        return None
+    return f"navigate_to {goal_id}"
+
+
+def create_ros_command_publisher(topic: str, node_name: str):
+    try:
+        import rclpy
+        from rclpy.node import Node
+        from std_msgs.msg import String
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "ROS publishing requested but rclpy/std_msgs are unavailable. "
+            "Source your ROS 2 workspace before using --ros-command-topic."
+        ) from exc
+
+    rclpy.init(args=None)
+    node = Node(node_name)
+    publisher = node.create_publisher(String, topic, 10)
+    return rclpy, node, publisher, String
+
+
+def publish_ros_command(ros_context, command: str) -> None:
+    rclpy, node, publisher, string_type = ros_context
+    message = string_type()
+    message.data = command
+    publisher.publish(message)
+    rclpy.spin_once(node, timeout_sec=0.0)
+    eprint(f"adk_transcript_bridge: published ROS command -> {command}")
+
+
 async def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    if not args.dry_run and "GOOGLE_API_KEY" not in os.environ:
+    ros_context = None
+    if args.ros_command_topic:
+        try:
+            ros_context = create_ros_command_publisher(
+                args.ros_command_topic,
+                args.ros_node_name,
+            )
+        except RuntimeError as exc:
+            eprint(f"error: {exc}")
+            return 2
+
+    runner = None
+    root_agent_name = None
+    mission_state = None
+    if not args.dry_run and "GOOGLE_API_KEY" in os.environ:
+        try:
+            Runner, InMemorySessionService, mission_state, waypoints, root_agent = (
+                load_adk_components()
+            )
+        except Exception as exc:
+            if not args.ros_command_topic:
+                eprint(
+                    "error: failed to load Google ADK dependencies. "
+                    "Install the ADK SDK or use --ros-command-topic for direct ROS-safe commands."
+                )
+                eprint(f"details: {exc}")
+                return 2
+            eprint(
+                "adk_transcript_bridge: failed to load Google ADK dependencies; "
+                "only direct ROS commands like stop/cancel/start exploration will be available."
+            )
+            eprint(f"details: {exc}")
+        else:
+            global ALIAS_REPLACEMENTS
+            ALIAS_REPLACEMENTS = build_alias_replacements(waypoints)
+            root_agent_name = root_agent.name
+            runner = Runner(
+                app_name=root_agent.name,
+                agent=root_agent,
+                session_service=InMemorySessionService(),
+            )
+    elif not args.dry_run and not args.ros_command_topic:
         eprint("error: GOOGLE_API_KEY must be set unless --dry-run is used.")
         return 2
-
-    runner = Runner(
-        app_name=root_agent.name,
-        agent=root_agent,
-        session_service=InMemorySessionService(),
-    )
+    elif not args.dry_run:
+        eprint(
+            "adk_transcript_bridge: GOOGLE_API_KEY is not set; only direct ROS commands "
+            "like stop/cancel/start exploration will be available."
+        )
 
     last_transcript = ""
     last_transcript_at = 0.0
@@ -286,6 +400,12 @@ async def main(argv: list[str] | None = None) -> int:
         if transcript in EXIT_WORDS:
             return False
 
+        direct_ros_command = direct_ros_command_for_transcript(transcript)
+        if direct_ros_command and ros_context is not None:
+            publish_ros_command(ros_context, direct_ros_command)
+            print(f"Queued command: {direct_ros_command}", flush=True)
+            return True
+
         now = time.monotonic()
         if transcript == last_transcript and (now - last_transcript_at) <= args.dedupe_window:
             eprint(f"adk_transcript_bridge: ignored duplicate transcript: {transcript}")
@@ -301,6 +421,12 @@ async def main(argv: list[str] | None = None) -> int:
             print(transcript, flush=True)
             return True
 
+        if runner is None:
+            eprint(
+                "adk_transcript_bridge: unable to resolve destination commands without GOOGLE_API_KEY."
+            )
+            return True
+
         remaining = args.min_interval - (now - last_request_at)
         if remaining > 0:
             eprint(f"adk_transcript_bridge: waiting {remaining:.1f}s to avoid rate limits...")
@@ -312,12 +438,17 @@ async def main(argv: list[str] | None = None) -> int:
                 transcript=transcript,
                 user_id=args.user_id,
                 session_id=args.session_id,
+                root_agent_name=root_agent_name,
             )
         except Exception as exc:
             eprint(f"adk_transcript_bridge: ADK request failed: {exc}")
             return True
 
         last_request_at = time.monotonic()
+        if ros_context is not None:
+            ros_command = build_ros_command_from_mission_state(mission_state)
+            if ros_command is not None:
+                publish_ros_command(ros_context, ros_command)
         print(" ".join(reply.split()), flush=True)
         return True
 
@@ -333,6 +464,11 @@ async def main(argv: list[str] | None = None) -> int:
         for raw_line in source:
             if not await handle_line(raw_line):
                 break
+
+    if ros_context is not None:
+        rclpy, node, _, _ = ros_context
+        node.destroy_node()
+        rclpy.shutdown()
 
     return 0
 

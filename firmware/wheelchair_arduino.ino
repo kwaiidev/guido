@@ -16,9 +16,10 @@
 #define ENC_B  3   // Right encoder – interrupt pin
 
 // ── Constants ───────────────────────────────────────────────────
-#define WHEEL_RADIUS      0.033   // metres (adjust to your wheel)
-#define WHEEL_BASE        0.17    // metres between wheels (adjust)
-#define TICKS_PER_REV     20      // encoder ticks per full wheel revolution
+#define WHEEL_RADIUS      0.033   // metres (placeholder; measure on hardware)
+#define WHEEL_BASE        0.17    // metres between wheels (placeholder; measure on hardware)
+#define TICKS_PER_REV     20      // encoder ticks per wheel revolution (placeholder)
+#define COMMAND_TIMEOUT_MS 500    // fail-safe stop if Jetson command stream drops
 
 // ── Globals ─────────────────────────────────────────────────────
 volatile long encA = 0, encB = 0;
@@ -26,6 +27,9 @@ MPU6050 mpu;
 
 float x = 0, y = 0, theta = 0;
 unsigned long lastTime = 0;
+unsigned long lastCommandTime = 0;
+int leftMotionDir = 0;
+int rightMotionDir = 0;
 
 // ── Encoder ISRs ────────────────────────────────────────────────
 void isrA() { encA++; }
@@ -80,6 +84,8 @@ void setup() {
   }
 
   lastTime = millis();
+  lastCommandTime = lastTime;
+  setMotors(0, 0);
 }
 
 // ── Loop ─────────────────────────────────────────────────────────
@@ -95,9 +101,25 @@ void loop() {
       int leftSpeed  = cmd.substring(1, spaceIdx).toInt();
       int rightSpeed = cmd.substring(cmd.indexOf('R') + 1).toInt();
       setMotors(leftSpeed, rightSpeed);
+      if (leftSpeed > 0) {
+        leftMotionDir = 1;
+      } else if (leftSpeed < 0) {
+        leftMotionDir = -1;
+      }
+      if (rightSpeed > 0) {
+        rightMotionDir = 1;
+      } else if (rightSpeed < 0) {
+        rightMotionDir = -1;
+      }
+      lastCommandTime = millis();
     } else if (cmd == "STOP") {
       setMotors(0, 0);
+      lastCommandTime = millis();
     }
+  }
+
+  if (millis() - lastCommandTime > COMMAND_TIMEOUT_MS) {
+    setMotors(0, 0);
   }
 
   // ── Publish odometry at ~20 Hz ──
@@ -115,8 +137,10 @@ void loop() {
     interrupts();
 
     // Distance each wheel travelled
-    float distA = (2.0 * PI * WHEEL_RADIUS * dA) / TICKS_PER_REV;
-    float distB = (2.0 * PI * WHEEL_RADIUS * dB) / TICKS_PER_REV;
+    // The encoders are currently counted without quadrature direction, so we
+    // recover sign from the most recent commanded wheel direction.
+    float distA = (2.0 * PI * WHEEL_RADIUS * dA * leftMotionDir) / TICKS_PER_REV;
+    float distB = (2.0 * PI * WHEEL_RADIUS * dB * rightMotionDir) / TICKS_PER_REV;
     float distCenter = (distA + distB) / 2.0;
 
     // Read gyro Z for heading

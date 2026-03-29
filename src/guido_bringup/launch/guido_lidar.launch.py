@@ -11,21 +11,19 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
     guido_bringup_share = get_package_share_directory('guido_bringup')
     guido_base_share = get_package_share_directory('guido_base')
-    ldlidar_share = get_package_share_directory('ldlidar_node')
 
     urdf_path = os.path.join(guido_bringup_share, 'urdf', 'guido.urdf.xml')
     with open(urdf_path, 'r') as handle:
         robot_desc = handle.read()
 
     lc_mgr_config = os.path.join(guido_bringup_share, 'config', 'lifecycle_mgr.yaml')
+    ldlidar_config = os.path.join(guido_bringup_share, 'config', 'ldlidar.yaml')
     bridge_config = os.path.join(guido_base_share, 'config', 'serial_bridge.yaml')
 
     guido_state_publisher = Node(
@@ -44,11 +42,12 @@ def generate_launch_description():
         parameters=[bridge_config],
     )
 
-    ldlidar_bringup = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(ldlidar_share, 'launch', 'ldlidar_bringup.launch.py')
-        ),
-        launch_arguments={'node_name': 'ldlidar_node'}.items(),
+    ldlidar_bringup = Node(
+        package='ldlidar_node',
+        executable='ldlidar_node',
+        name='ldlidar_node',
+        output='screen',
+        parameters=[ldlidar_config],
     )
 
     lifecycle_manager = Node(
