@@ -1,0 +1,22 @@
+guido_trajectory_controller:
+  ros__parameters:
+    pose_topic: '/navigation/pose'
+    odom_topic: '/odometry/filtered'
+    path_topic: '/navigation/global_path'
+    costmap_topic: '/navigation/local_costmap'
+    cmd_topic: '/cmd_vel_autonomy'
+    control_rate_hz: 20.0
+    lookahead_base_m: 0.70
+    lookahead_gain: 1.20
+    min_lookahead_m: 0.60
+    max_lookahead_m: 2.50
+    max_speed_mps: 1.00
+    min_speed_mps: 0.15
+    max_yaw_rate_rps: 0.90
+    max_accel_mps2: 0.50
+    max_decel_mps2: 0.90
+    curvature_speed_gain: 2.20
+    obstacle_slowdown_distance_m: 3.00
+    obstacle_stop_distance_m: 0.90
+    goal_tolerance_m: 0.35
+    goal_slowdown_distance_m: 1.50

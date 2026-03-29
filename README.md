@@ -1,6 +1,6 @@
 # Guido Smart Wheelchair
 
-ROS 2 wheelchair bringup and recovered autonomous navigation stack for a Jetson + Arduino platform with LD19 LiDAR, serial motor control, waypointing, and frontier exploration.
+ROS 2 wheelchair bringup and autonomous navigation stack for a Jetson + Arduino platform with LD19 LiDAR, serial motor control, waypointing, and Nav2 path following (manual teleop / WASD builds the map).
 
 ## System Architecture Summary
 
@@ -26,7 +26,7 @@ ROS 2 wheelchair bringup and recovered autonomous navigation stack for a Jetson 
 ### Recovered autonomy path
 
 1. A user or bridge publishes plain-text commands to `/auto_nav/command`
-2. `auto_nav_command_node` validates health, TF, map, and mode
+2. `auto_nav_command_node` validates health, TF, and commands
 3. The command node emits JSON navigation requests on `/auto_nav/request`
 4. `auto_nav_navigation_node` forwards those requests to Nav2 `navigate_to_pose`
 5. Nav2 publishes `/cmd_vel`
@@ -47,7 +47,7 @@ ROS 2 wheelchair bringup and recovered autonomous navigation stack for a Jetson 
 | `src/guido_base` | Implemented | Serial bridge and keyboard teleop |
 | `src/guido_bringup` | Implemented | Base and LiDAR launch, URDF, LiDAR config |
 | `firmware/wheelchair_arduino.ino` | Implemented, hardened | Added Arduino-side watchdog and signed odometry estimate |
-| `src/auto_nav` | Reconstructed | Frontier logic, supervisor, ROS bridge nodes, launch/config, tests |
+| `src/auto_nav` | Reconstructed | Waypoint supervisor, ROS bridge nodes, launch/config, tests |
 | `scripts/voice_stream.py` | Implemented | Offline Vosk or ElevenLabs STT |
 | `scripts/adk_transcript_bridge.py` | Extended | Can now publish safe ROS commands |
 | `agents/guido_mission_agent` | Partial | ADK waypoint resolution only, still no Google Maps |
@@ -70,24 +70,23 @@ guido/
 |  `- wheelchair_arduino.ino
 |- scripts/
 |  |- adk_transcript_bridge.py
-|  |- install_ros2_jazzy.sh
+|  |- install_ros2_humble.sh
 |  |- setup_lidar.sh
 |  |- voice_stream.py
 |  `- requirements-voice.txt
 `- src/
    |- auto_nav/
    |  |- config/
-   |  |  |- exploration.rviz
    |  |  |- nav2.yaml
+   |  |  |- slam_nav.rviz
    |  |  `- slam_toolbox.yaml
    |  |- launch/
-   |  |  |- exploration.launch.py
-   |  |  `- navigation.launch.py
+   |  |  |- navigation.launch.py
+   |  |  `- slam_nav.launch.py
    |  |- navigation/
    |  |  |- adapters.py
    |  |  |- command_node.py
    |  |  |- commands.py
-   |  |  |- frontiers.py
    |  |  |- health.py
    |  |  |- messages.py
    |  |  |- navigation_node.py
@@ -121,21 +120,25 @@ The current checkout has an empty `src/ldrobot-lidar-ros2` gitlink. Restore it b
 git submodule update --init --recursive src/ldrobot-lidar-ros2
 ```
 
-### 2. Install ROS 2 Jazzy and runtime packages
+The LiDAR driver submodule is configured to track the **`humble`** branch (matches ROS 2 Humble on Ubuntu 22.04).
+
+### 2. Install ROS 2 Humble and runtime packages
+
+Use **Ubuntu 22.04 (Jammy)** for official Humble binaries.
 
 ```bash
-chmod +x scripts/install_ros2_jazzy.sh
-sudo ./scripts/install_ros2_jazzy.sh
-source /opt/ros/jazzy/setup.bash
+chmod +x scripts/install_ros2_humble.sh
+sudo ./scripts/install_ros2_humble.sh
+source /opt/ros/humble/setup.bash
 ```
 
-The install script now includes:
+The install script includes:
 
-- `ros-jazzy-navigation2`
-- `ros-jazzy-nav2-bringup`
-- `ros-jazzy-nav2-map-server`
-- `ros-jazzy-nav2-lifecycle-manager`
-- `ros-jazzy-slam-toolbox`
+- `ros-humble-navigation2`
+- `ros-humble-nav2-bringup`
+- `ros-humble-nav2-map-server`
+- `ros-humble-nav2-lifecycle-manager`
+- `ros-humble-slam-toolbox`
 
 ### 3. Build the workspace
 
@@ -307,11 +310,10 @@ python3 scripts/voice_stream.py --model models/vosk-model-small-en-us-0.15 \
   | python3 scripts/adk_transcript_bridge.py --ros-command-topic /auto_nav/command
 ```
 
-You only need `GOOGLE_API_KEY` and Google ADK installed when you want the bridge to resolve spoken destinations through the mission agent. Direct `start_exploration`, `cancel_navigation`, and `stop` commands can now be published into ROS without ADK.
+You only need `GOOGLE_API_KEY` and Google ADK installed when you want the bridge to resolve spoken destinations through the mission agent. Direct `cancel_navigation` and `stop` commands can be published into ROS without ADK.
 
 Direct ROS-safe commands supported by the bridge:
 
-- `start_exploration`
 - `cancel_navigation`
 - `stop`
 
@@ -358,78 +360,16 @@ Important limitation:
   -> motors
 ```
 
-Frontier exploration never publishes raw PWM or GPIO commands.
+Waypoint navigation via Nav2 never publishes raw PWM or GPIO commands; it only sends goals that become `/cmd_vel` through Nav2.
 
-## Frontier Mapping Design
+## Waypoint navigation
 
-Implemented in:
-
-- `src/auto_nav/navigation/frontiers.py`
-- `src/auto_nav/navigation/supervisor.py`
-- `src/auto_nav/navigation/command_node.py`
-
-Behavior:
-
-- Frontier cells are detected as unknown cells adjacent to free space
-- Frontier cells are clustered with 8-connectivity
-- Small clusters are rejected using `min_cluster_size`
-- Candidate goals are selected on reachable free cells bordering the frontier
-- Candidates are ranked by:
-  - reachable path distance
-  - information gain
-  - blacklist filtering
-- Failed or timed-out frontiers are blacklisted
-- Exploration stops if:
-  - scan / odom / tf health goes stale
-  - no more valid frontiers remain and completion criteria are met
-  - the user cancels or stops
-- When exploration completes, the stack requests a map save through `/map_saver/save_map`
-
-Debug visibility:
-
-- RViz marker topic: `/auto_nav/frontier_markers`
-- RViz config: `src/auto_nav/config/exploration.rviz`
+- Save poses with `save_waypoint <name>` on `/auto_nav/command` (requires `map` frame localization).
+- Navigate with `navigate_to <name>`.
+- List names with `list_waypoints`.
+- RViz config for SLAM + map + scan: `src/auto_nav/config/slam_nav.rviz`
 
 ## Launch Files
-
-### Single-command frontier mapping bringup
-
-Primary operator command:
-
-```bash
-python3 scripts/start_frontier_mapping.py
-```
-
-What it verifies before motion:
-
-- `ros2` is on `PATH`
-- `auto_nav`, `guido_bringup`, and `nav2_bringup` are discoverable
-- the `src/ldrobot-lidar-ros2` submodule is restored
-- the configured Arduino and LiDAR serial devices exist
-- `.guido/`, `.guido/maps/`, and `.guido/logs/` are writable
-- `/auto_nav/command` has a subscriber
-- `/map_saver/save_map` is available
-- Nav2 `navigate_to_pose` is available
-- `/ldlidar_node/scan`, `/odom`, `/map`, and `map -> base_footprint` or `map -> base_link` TF are live
-
-Default behavior:
-
-- launches `ros2 launch auto_nav exploration.launch.py` from the repo root
-- publishes `start_exploration` automatically once the stack is healthy
-- publishes `stop` and tears the stack down on failure or Ctrl-C
-
-Useful flags:
-
-- `--no-auto-start`
-- `--launch-timeout 20`
-- `--health-timeout 30`
-- `--log-file ./.guido/logs/frontier_mapping.log`
-- `--dry-run-checks`
-
-Important IMU note:
-
-- MPU6050 is warn-only in this launcher because the repo still does not expose an IMU ROS topic
-- if `MPU6050 connection failed` appears in launch output, the script surfaces that warning but does not block exploration
 
 ### Base only
 
@@ -451,21 +391,15 @@ ros2 launch auto_nav navigation.launch.py
 
 Run the launch command from the workspace root unless you override parameters. The recovered launch files write maps and waypoints relative to the current working directory in `.guido/`.
 
-### Full exploration stack
+### SLAM + Nav2 + waypoint stack
 
-Low-level manual bringup:
-
-```bash
-ros2 launch auto_nav exploration.launch.py
-```
-
-Manual start command:
+Bring up SLAM, Nav2, map saver, and `auto_nav` (drive with keyboard teleop or another `/cmd_vel` source to map, then use waypoints):
 
 ```bash
-ros2 topic pub /auto_nav/command std_msgs/msg/String "{data: 'start_exploration'}" -1
+ros2 launch auto_nav slam_nav.launch.py
 ```
 
-Stop exploration:
+Stop the robot / clear Nav2 motion:
 
 ```bash
 ros2 topic pub /auto_nav/command std_msgs/msg/String "{data: 'stop'}" -1
@@ -539,14 +473,14 @@ ls -l /dev/ldlidar /dev/serial/by-id/*1a86*
 4. Source ROS and the workspace:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 source install/local_setup.bash
 ```
 
-5. Start the single-command launcher:
+5. Start SLAM + Nav2 + auto_nav (from the workspace root):
 
 ```bash
-python3 scripts/start_frontier_mapping.py
+ros2 launch auto_nav slam_nav.launch.py
 ```
 
 6. In a second terminal, watch status:
@@ -610,7 +544,7 @@ Most likely causes:
 - `/dev/ldlidar` does not exist
 - baud rate does not match the LD19
 
-### Exploration never starts
+### Waypoint or Nav2 commands fail
 
 Check:
 
@@ -620,19 +554,7 @@ ros2 topic echo /map
 ros2 topic echo /odom
 ```
 
-If you are using the single launcher, also check:
-
-```bash
-tail -f .guido/logs/frontier_mapping.log
-python3 scripts/start_frontier_mapping.py --dry-run-checks
-```
-
-The command node will refuse to start exploration if:
-
-- `/map` is missing
-- current map-frame pose cannot be resolved
-- health monitor sees stale scan / odom / tf
-- `/cmd_vel` has no active consumer
+Navigation to a waypoint is rejected if scan / odom / TF health is stale. Saving a waypoint requires a valid `map -> base_link` (or configured base frame) transform.
 
 ### Waypoint commands fail from voice
 

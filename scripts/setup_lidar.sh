@@ -8,8 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_DIR="$(dirname "$SCRIPT_DIR")"
 
 if [ -z "${ROS_DISTRO:-}" ]; then
-  echo "ROS 2 environment not sourced. Sourcing Jazzy..."
-  source /opt/ros/jazzy/setup.bash
+  echo "ROS 2 environment not sourced. Sourcing Humble..."
+  source /opt/ros/humble/setup.bash
 fi
 
 echo "============================================"
@@ -75,6 +75,6 @@ echo ""
 echo " Launch mapping + Nav2:"
 echo "   ros2 launch auto_nav navigation.launch.py"
 echo ""
-echo " Launch autonomous exploration:"
-echo "   ros2 launch auto_nav exploration.launch.py"
+echo " Launch SLAM + Nav2 + waypoint auto_nav:"
+echo "   ros2 launch auto_nav slam_nav.launch.py"
 echo "============================================"

@@ -1,0 +1,17 @@
+guido_safety_monitor:
+  ros__parameters:
+    input_cmd_topic: '/cmd_vel_request'
+    output_cmd_topic: '/cmd_vel'
+    scan_topic: '/navigation/filtered_scan'
+    odom_topic: '/odometry/filtered'
+    localization_ok_topic: '/navigation/localization_ok'
+    emergency_topic: '/navigation/emergency_stop'
+    safety_status_topic: '/navigation/safety_status'
+    reaction_time_sec: 0.25
+    max_braking_decel_mps2: 1.20
+    static_margin_m: 0.60
+    lateral_margin_m: 0.45
+    reverse_margin_m: 0.35
+    scan_timeout_sec: 0.40
+    odom_timeout_sec: 0.40
+    localization_timeout_sec: 0.50

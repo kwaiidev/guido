@@ -1,0 +1,22 @@
+guido_global_planner:
+  ros__parameters:
+    map_topic: '/map'
+    pose_topic: '/navigation/pose'
+    goal_topic: '/navigation/goal'
+    point_cloud_topic: '/navigation/points'
+    path_topic: '/navigation/global_path'
+    planner_status_topic: '/navigation/planner_status'
+    planning_rate_hz: 2.0
+    step_size_m: 0.50
+    heading_bins: 72
+    max_steering_deg: 28.0
+    steering_samples: 5
+    wheelbase_m: 0.80
+    footprint_radius_m: 0.45
+    lethal_cost_threshold: 50
+    goal_position_tolerance_m: 0.45
+    goal_yaw_tolerance_rad: 0.40
+    max_iterations: 25000
+    reverse_enabled: false
+    smooth_passes: 3
+    dynamic_obstacle_radius_m: 0.40

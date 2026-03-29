@@ -16,11 +16,6 @@ Visualization Manager:
       Name: Scan
       Topic:
         Value: /ldlidar_node/scan
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: Frontiers
-      Topic:
-        Value: /auto_nav/frontier_markers
   Enabled: true
   Global Options:
     Fixed Frame: map

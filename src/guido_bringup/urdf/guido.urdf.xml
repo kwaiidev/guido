@@ -27,4 +27,12 @@
     <origin xyz="0.0 0.0 1.0" rpy="0 0 0"/>
   </joint>
 
+  <!-- Scan frame (matches ldlidar_descr.urdf.xml sensor height); scans use frame_id ldlidar_link -->
+  <joint name="ldlidar_link_joint" type="fixed">
+    <parent link="ldlidar_base"/>
+    <child link="ldlidar_link"/>
+    <origin xyz="0 0 0.02745" rpy="0 0 0"/>
+  </joint>
+  <link name="ldlidar_link"/>
+
 </robot>

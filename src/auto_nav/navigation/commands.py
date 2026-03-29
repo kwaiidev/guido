@@ -1,14 +1,10 @@
 from navigation.types import CommandType
 from navigation.types import NavCommand
-from navigation.types import OperatingMode
 
 
 HELP_TEXT = (
     'Supported commands: save_waypoint <name>, navigate_to <name>, '
-    'list_waypoints, start_exploration, cancel_navigation, stop, help'
-)
-EXPLORATION_HELP_TEXT = (
-    'Supported commands: start_exploration, cancel_navigation, stop, help'
+    'list_waypoints, cancel_navigation, stop, help'
 )
 
 _ARGUMENT_COMMANDS = {
@@ -17,16 +13,15 @@ _ARGUMENT_COMMANDS = {
 }
 _NO_ARGUMENT_COMMANDS = {
     CommandType.LIST_WAYPOINTS.value: CommandType.LIST_WAYPOINTS,
-    CommandType.START_EXPLORATION.value: CommandType.START_EXPLORATION,
     CommandType.CANCEL_NAVIGATION.value: CommandType.CANCEL_NAVIGATION,
     CommandType.STOP.value: CommandType.STOP,
     CommandType.HELP.value: CommandType.HELP,
 }
 
 
-def help_text_for_mode(mode) -> str:
-    if OperatingMode(mode) == OperatingMode.EXPLORATION:
-        return EXPLORATION_HELP_TEXT
+def help_text_for_mode(_mode=None) -> str:
+    """Return command help. *mode* is ignored; kept for API compatibility."""
+
     return HELP_TEXT
 
 

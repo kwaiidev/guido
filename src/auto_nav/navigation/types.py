@@ -64,7 +64,6 @@ class CommandType(str, Enum):
     SAVE_WAYPOINT = 'save_waypoint'
     NAVIGATE_TO = 'navigate_to'
     LIST_WAYPOINTS = 'list_waypoints'
-    START_EXPLORATION = 'start_exploration'
     CANCEL_NAVIGATION = 'cancel_navigation'
     STOP = 'stop'
     HELP = 'help'
@@ -80,11 +79,6 @@ class ActionType(str, Enum):
     NAVIGATE = 'navigate'
     CANCEL = 'cancel'
     STOP = 'stop'
-
-
-class OperatingMode(str, Enum):
-    NAVIGATION = 'navigation'
-    EXPLORATION = 'exploration'
 
 
 @dataclass(frozen=True)
@@ -111,8 +105,6 @@ class HealthStatus:
 @dataclass(frozen=True)
 class CommandContext:
     current_pose: Optional[Pose2D] = None
-    map_available: bool = False
-    cmd_vel_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,22 +137,6 @@ class OccupancyGridSnapshot:
         if not self.in_bounds(row, col):
             return None
         return row, col
-
-
-@dataclass(frozen=True)
-class FrontierParams:
-    """Tuning knobs for frontier detection and ranking."""
-
-    min_cluster_size: int = 10
-    blacklist_radius: float = 0.5
-    info_gain_weight: float = 0.3
-    info_gain_radius: int = 8
-
-
-@dataclass(frozen=True)
-class PendingMapSave:
-    map_id: str
-    path: str
 
 
 @dataclass(frozen=True)

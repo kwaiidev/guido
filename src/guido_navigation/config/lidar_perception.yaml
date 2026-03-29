@@ -1,0 +1,23 @@
+guido_lidar_perception:
+  ros__parameters:
+    scan_topic: '/ldlidar_node/scan'
+    point_cloud_topic: '/navigation/points'
+    costmap_topic: '/navigation/local_costmap'
+    obstacle_markers_topic: '/navigation/obstacle_markers'
+    tracking_markers_topic: '/navigation/tracking_markers'
+    grid_width_m: 12.0
+    grid_height_m: 12.0
+    resolution: 0.10
+    inflation_radius_m: 0.45
+    cluster_tolerance_m: 0.35
+    min_cluster_points: 3
+    dynamic_match_distance_m: 0.90
+    dynamic_speed_threshold_mps: 0.20
+    max_range_m: 15.0
+    min_range_m: 0.10
+    self_filter_enabled: true
+    publish_filtered_scan: true
+    keepout_x_min_m: -0.50
+    keepout_x_max_m: 0.50
+    keepout_y_min_m: -0.45
+    keepout_y_max_m: 0.45

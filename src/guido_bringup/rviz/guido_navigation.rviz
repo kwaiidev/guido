@@ -1,0 +1,69 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.7
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 160
+      Enabled: true
+      Name: Grid
+      Plane: XY
+    - Class: rviz_default_plugins/Map
+      Enabled: true
+      Name: Global Map
+      Topic:
+        Value: /map
+    - Class: rviz_default_plugins/Map
+      Enabled: true
+      Name: Local Costmap
+      Topic:
+        Value: /navigation/local_costmap
+    - Class: rviz_default_plugins/LaserScan
+      Enabled: true
+      Name: LiDAR Scan
+      Topic:
+        Value: /navigation/filtered_scan
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Keepout Filter
+      Topic:
+        Value: /navigation/self_filter_marker
+    - Class: rviz_default_plugins/Path
+      Enabled: true
+      Name: Global Path
+      Topic:
+        Value: /navigation/global_path
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Obstacles
+      Topic:
+        Value: /navigation/obstacle_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Tracks
+      Topic:
+        Value: /navigation/tracking_markers
+    - Class: rviz_default_plugins/RobotModel
+      Enabled: true
+      Name: Robot
+  Enabled: true
+  Global Options:
+    Fixed Frame: map
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 10.0
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0

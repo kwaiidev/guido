@@ -1,4 +1,4 @@
-"""Minimal keyboard teleop that publishes Twist commands on /cmd_vel."""
+"""Minimal keyboard teleop that publishes Twist commands on a configurable topic."""
 
 import select
 import sys
@@ -17,6 +17,7 @@ w : forward
 s : backward
 a : turn left
 d : turn right
+arrow up/down/left/right : same as w/s/a/d
 space/x : stop
 q : increase linear speed
 z : decrease linear speed
@@ -33,12 +34,14 @@ class KeyboardTeleop(Node):
         self.declare_parameter('linear_speed', 0.15)
         self.declare_parameter('angular_speed', 1.0)
         self.declare_parameter('publish_rate_hz', 10.0)
+        self.declare_parameter('cmd_topic', '/cmd_vel')
 
         self._linear_speed = float(self.get_parameter('linear_speed').value)
         self._angular_speed = float(self.get_parameter('angular_speed').value)
         self._publish_rate_hz = float(self.get_parameter('publish_rate_hz').value)
+        self._cmd_topic = str(self.get_parameter('cmd_topic').value)
 
-        self._pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self._pub = self.create_publisher(Twist, self._cmd_topic, 10)
         self._current = Twist()
 
     def _print_status(self):
@@ -56,13 +59,13 @@ class KeyboardTeleop(Node):
         self._publish_current()
 
     def _handle_key(self, key: str):
-        if key == 'w':
+        if key in ('w', '\x1b[A'):
             self._set_motion(self._linear_speed, 0.0)
-        elif key == 's':
+        elif key in ('s', '\x1b[B'):
             self._set_motion(-self._linear_speed, 0.0)
-        elif key == 'a':
+        elif key in ('a', '\x1b[D'):
             self._set_motion(0.0, self._angular_speed)
-        elif key == 'd':
+        elif key in ('d', '\x1b[C'):
             self._set_motion(0.0, -self._angular_speed)
         elif key in (' ', 'x'):
             self._set_motion(0.0, 0.0)
@@ -89,7 +92,7 @@ class KeyboardTeleop(Node):
             while rclpy.ok():
                 ready, _, _ = select.select([sys.stdin], [], [], timeout)
                 if ready:
-                    key = sys.stdin.read(1)
+                    key = self._read_key()
                     if key == '\x03':
                         raise KeyboardInterrupt
                     self._handle_key(key)
@@ -98,6 +101,20 @@ class KeyboardTeleop(Node):
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
             self._set_motion(0.0, 0.0)
+
+    @staticmethod
+    def _read_key() -> str:
+        key = sys.stdin.read(1)
+        if key != '\x1b':
+            return key
+
+        sequence = key
+        for _ in range(2):
+            ready, _, _ = select.select([sys.stdin], [], [], 0.01)
+            if not ready:
+                break
+            sequence += sys.stdin.read(1)
+        return sequence
 
 
 def main(args=None):

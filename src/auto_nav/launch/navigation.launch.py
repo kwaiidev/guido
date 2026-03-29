@@ -10,12 +10,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     auto_nav_share = get_package_share_directory('auto_nav')
     guido_bringup_share = get_package_share_directory('guido_bringup')
-    nav2_bringup_share = get_package_share_directory('nav2_bringup')
 
     slam_config = os.path.join(auto_nav_share, 'config', 'slam_toolbox.yaml')
     nav2_config = os.path.join(auto_nav_share, 'config', 'nav2.yaml')
+    twist_mux_config = os.path.join(guido_bringup_share, 'config', 'twist_mux.yaml')
     waypoint_file = os.path.join(os.getcwd(), '.guido', 'waypoints.yaml')
-    map_output_dir = os.path.join(os.getcwd(), '.guido', 'maps')
 
     base_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -33,13 +32,22 @@ def generate_launch_description():
 
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(nav2_bringup_share, 'launch', 'navigation_launch.py')
+            os.path.join(auto_nav_share, 'launch', 'guido_navigation.launch.py')
         ),
         launch_arguments={
             'use_sim_time': 'false',
             'params_file': nav2_config,
             'autostart': 'true',
         }.items(),
+    )
+
+    twist_mux = Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='twist_mux',
+        output='screen',
+        parameters=[twist_mux_config],
+        remappings=[('cmd_vel_out', '/cmd_vel')],
     )
 
     auto_nav_command = Node(
@@ -49,9 +57,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {
-                'mode': 'navigation',
                 'waypoint_file': waypoint_file,
-                'map_output_dir': map_output_dir,
             }
         ],
     )
@@ -68,6 +74,7 @@ def generate_launch_description():
             base_stack,
             slam_toolbox,
             nav2,
+            twist_mux,
             auto_nav_command,
             auto_nav_navigation,
         ]

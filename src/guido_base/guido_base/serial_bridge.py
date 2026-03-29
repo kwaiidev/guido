@@ -1,22 +1,26 @@
 """ROS 2 serial bridge for the Guido wheelchair Arduino motor controller.
 
 Subscribes to /cmd_vel (Twist), converts to differential-drive PWM commands,
-sends them over serial to the Arduino. Reads odometry back from the Arduino
-and publishes /odom plus the odom -> base_footprint TF.
+sends them over serial to the Arduino. Reads odometry and IMU back from the
+Arduino and publishes /odom plus the odom -> base_footprint TF.
 
 Arduino protocol:
   TX (Jetson -> Arduino): "L<int> R<int>\n" or "STOP\n"
-  RX (Arduino -> Jetson): "ODOM <x> <y> <theta> <vLin> <vAng>\n"
+  RX (Arduino -> Jetson):
+    "ODOM <x> <y> <theta> <vLin> <vAng>\n"
+    "IMU <ax> <ay> <az> <gx> <gy> <gz>\n"
 """
 
 import math
 import threading
+import time
 
 from geometry_msgs.msg import Quaternion, TransformStamped, Twist
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
 import serial
+from sensor_msgs.msg import Imu
 from tf2_ros import TransformBroadcaster
 
 
@@ -36,8 +40,13 @@ class SerialBridge(Node):
         self.declare_parameter('wheel_base', 0.17)
         self.declare_parameter('max_wheel_vel', 0.5)
         self.declare_parameter('cmd_timeout_sec', 0.5)
+        self.declare_parameter('cmd_topic', 'cmd_vel')
+        self.declare_parameter('odom_topic', 'odom')
+        self.declare_parameter('imu_topic', 'imu/data_raw')
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('imu_frame', 'base_link')
+        self.declare_parameter('publish_tf', True)
         self.declare_parameter('invert_left', False)
         self.declare_parameter('invert_right', False)
         self.declare_parameter('left_pwm_scale', 1.0)
@@ -50,8 +59,13 @@ class SerialBridge(Node):
         self._wheel_base = self.get_parameter('wheel_base').value
         self._max_wheel_vel = self.get_parameter('max_wheel_vel').value
         self._cmd_timeout = self.get_parameter('cmd_timeout_sec').value
+        self._cmd_topic = str(self.get_parameter('cmd_topic').value)
+        self._odom_topic = str(self.get_parameter('odom_topic').value)
+        self._imu_topic = str(self.get_parameter('imu_topic').value)
         self._odom_frame = self.get_parameter('odom_frame').value
         self._base_frame = self.get_parameter('base_frame').value
+        self._imu_frame = str(self.get_parameter('imu_frame').value)
+        self._publish_tf = bool(self.get_parameter('publish_tf').value)
         self._invert_left = bool(self.get_parameter('invert_left').value)
         self._invert_right = bool(self.get_parameter('invert_right').value)
         self._left_pwm_scale = float(self.get_parameter('left_pwm_scale').value)
@@ -62,9 +76,10 @@ class SerialBridge(Node):
         self._serial = None
         self._connect_serial()
 
-        self._odom_pub = self.create_publisher(Odometry, 'odom', 10)
+        self._odom_pub = self.create_publisher(Odometry, self._odom_topic, 10)
+        self._imu_pub = self.create_publisher(Imu, self._imu_topic, 20)
         self._tf_broadcaster = TransformBroadcaster(self)
-        self._cmd_sub = self.create_subscription(Twist, 'cmd_vel', self._cmd_vel_cb, 10)
+        self._cmd_sub = self.create_subscription(Twist, self._cmd_topic, self._cmd_vel_cb, 10)
 
         self._last_cmd_time = self.get_clock().now()
         self._watchdog_timer = self.create_timer(0.1, self._watchdog_cb)
@@ -73,7 +88,8 @@ class SerialBridge(Node):
         self._read_thread.start()
 
         self.get_logger().info(
-            f'Serial bridge started on {self._port_name} @ {self._baudrate}'
+            f'Serial bridge started on {self._port_name} @ {self._baudrate} '
+            f'(cmd_topic={self._cmd_topic}, publish_tf={self._publish_tf})'
         )
 
     def _connect_serial(self):
@@ -97,7 +113,7 @@ class SerialBridge(Node):
         try:
             self._serial.write(message.encode('ascii'))
         except serial.SerialException as exc:
-            self.get_logger().warn(f'Serial write error: {exc}')
+            self.get_logger().warning(f'Serial write error: {exc}')
             self._serial = None
 
     def _cmd_vel_cb(self, message: Twist):
@@ -135,36 +151,51 @@ class SerialBridge(Node):
     def _serial_read_loop(self):
         while rclpy.ok():
             if self._serial is None or not self._serial.is_open:
-                rclpy.spin_once(self, timeout_sec=1.0)
+                time.sleep(1.0)
                 self._connect_serial()
                 continue
 
             try:
                 raw = self._serial.readline().decode('ascii', errors='replace').strip()
             except serial.SerialException as exc:
-                self.get_logger().warn(f'Serial read error: {exc}')
+                self.get_logger().warning(f'Serial read error: {exc}')
                 self._serial = None
                 continue
 
-            if not raw.startswith('ODOM '):
-                continue
+            if raw.startswith('ODOM '):
+                parts = raw.split()
+                if len(parts) != 6:
+                    continue
 
-            parts = raw.split()
-            if len(parts) != 6:
-                continue
+                try:
+                    x = float(parts[1])
+                    y = float(parts[2])
+                    theta = float(parts[3])
+                    v_lin = float(parts[4])
+                    v_ang = float(parts[5])
+                except ValueError:
+                    continue
 
-            try:
-                x = float(parts[1])
-                y = float(parts[2])
-                theta = float(parts[3])
-                v_lin = float(parts[4])
-                v_ang = float(parts[5])
-            except ValueError:
-                continue
+                stamp = self.get_clock().now().to_msg()
+                self._publish_odom(stamp, x, y, theta, v_lin, v_ang)
+                if self._publish_tf:
+                    self._broadcast_tf(stamp, x, y, theta)
+            elif raw.startswith('IMU '):
+                parts = raw.split()
+                if len(parts) != 7:
+                    continue
 
-            stamp = self.get_clock().now().to_msg()
-            self._publish_odom(stamp, x, y, theta, v_lin, v_ang)
-            self._broadcast_tf(stamp, x, y, theta)
+                try:
+                    ax = float(parts[1])
+                    ay = float(parts[2])
+                    az = float(parts[3])
+                    gx = float(parts[4])
+                    gy = float(parts[5])
+                    gz = float(parts[6])
+                except ValueError:
+                    continue
+
+                self._publish_imu(self.get_clock().now().to_msg(), ax, ay, az, gx, gy, gz)
 
     def _publish_odom(self, stamp, x, y, theta, v_lin, v_ang):
         message = Odometry()
@@ -189,6 +220,25 @@ class SerialBridge(Node):
         transform.transform.translation.y = y
         transform.transform.rotation = yaw_to_quaternion(theta)
         self._tf_broadcaster.sendTransform(transform)
+
+    def _publish_imu(self, stamp, ax, ay, az, gx, gy, gz):
+        message = Imu()
+        message.header.stamp = stamp
+        message.header.frame_id = self._imu_frame
+        message.orientation_covariance[0] = -1.0
+        message.linear_acceleration.x = ax
+        message.linear_acceleration.y = ay
+        message.linear_acceleration.z = az
+        message.angular_velocity.x = gx
+        message.angular_velocity.y = gy
+        message.angular_velocity.z = gz
+        message.angular_velocity_covariance[0] = 0.02
+        message.angular_velocity_covariance[4] = 0.02
+        message.angular_velocity_covariance[8] = 0.02
+        message.linear_acceleration_covariance[0] = 0.2
+        message.linear_acceleration_covariance[4] = 0.2
+        message.linear_acceleration_covariance[8] = 0.2
+        self._imu_pub.publish(message)
 
     @staticmethod
     def _clamp(value, lower, upper):

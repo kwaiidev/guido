@@ -1,0 +1,7 @@
+guido_mission_manager:
+  ros__parameters:
+    voice_topic: '/voice/command_text'
+    rviz_goal_topic: '/goal_pose'
+    goal_topic: '/navigation/goal'
+    mode_topic: '/system/mode'
+    mission_status_topic: '/navigation/mission_status'

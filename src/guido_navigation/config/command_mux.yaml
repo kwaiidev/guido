@@ -1,0 +1,10 @@
+guido_command_mux:
+  ros__parameters:
+    default_mode: 'manual'
+    manual_topic: '/cmd_vel_manual'
+    autonomy_topic: '/cmd_vel_autonomy'
+    mode_topic: '/system/mode'
+    active_mode_topic: '/system/active_mode'
+    output_topic: '/cmd_vel_request'
+    manual_timeout_sec: 0.75
+    autonomy_timeout_sec: 0.50

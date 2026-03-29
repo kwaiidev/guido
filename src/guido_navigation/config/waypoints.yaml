@@ -1,0 +1,37 @@
+waypoints:
+  parking_lot:
+    aliases: ['parking lot', 'lot', 'parking']
+    frame_id: 'map'
+    x: 8.0
+    y: -2.0
+    yaw: 0.0
+  waypoint_1:
+    aliases: ['waypoint 1', 'point 1']
+    frame_id: 'map'
+    x: 2.0
+    y: 1.0
+    yaw: 0.0
+  waypoint_2:
+    aliases: ['waypoint 2', 'point 2']
+    frame_id: 'map'
+    x: 5.5
+    y: 1.5
+    yaw: 0.2
+  front_door:
+    aliases: ['front door', 'door', 'exit']
+    frame_id: 'map'
+    x: 4.0
+    y: 1.0
+    yaw: 0.0
+  charging_station:
+    aliases: ['charging station', 'charger', 'dock']
+    frame_id: 'map'
+    x: 0.8
+    y: 2.1
+    yaw: 3.14
+  window_corner:
+    aliases: ['window', 'window corner']
+    frame_id: 'map'
+    x: 3.2
+    y: 2.4
+    yaw: 1.30

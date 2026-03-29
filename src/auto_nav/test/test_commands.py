@@ -23,13 +23,8 @@ def test_parse_nav_command_rejects_unknown_command():
     assert HELP_TEXT in str(exc.value)
 
 
-def test_parse_nav_command_accepts_start_exploration_without_argument():
-    command = parse_nav_command('start_exploration')
-    assert command.command_type == CommandType.START_EXPLORATION
-    assert command.argument is None
-
-
-def test_parse_nav_command_rejects_argument_for_start_exploration():
+def test_parse_nav_command_rejects_start_exploration():
     with pytest.raises(ValueError) as exc:
-        parse_nav_command('start_exploration now')
-    assert 'does not take an argument' in str(exc.value)
+        parse_nav_command('start_exploration')
+    assert 'Unsupported command' in str(exc.value)
+    assert HELP_TEXT in str(exc.value)

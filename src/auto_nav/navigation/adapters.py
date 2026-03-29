@@ -41,9 +41,6 @@ class CommandBridgeAdapter:
     def handle_navigation_result(self, result: NavigationResult) -> AdapterDispatch:
         return self._to_dispatch(self._supervisor.apply_navigation_result(result))
 
-    def plan_exploration(self, current_pose, occupancy_grid) -> AdapterDispatch:
-        return self._to_dispatch(self._supervisor.plan_exploration(current_pose, occupancy_grid))
-
     def tick(self, now: Optional[float] = None) -> AdapterDispatch:
         return self._to_dispatch(self._supervisor.tick(now))
 

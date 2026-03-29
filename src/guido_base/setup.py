@@ -14,6 +14,13 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (
+            os.path.join('lib', package_name),
+            [
+                os.path.join('bin', 'serial_bridge'),
+                os.path.join('bin', 'keyboard_teleop'),
+            ],
+        ),
     ],
     install_requires=['setuptools', 'pyserial'],
     zip_safe=True,
@@ -21,10 +28,4 @@ setup(
     maintainer_email='todo@guido.dev',
     description='Serial bridge between ROS 2 and the Guido wheelchair Arduino',
     license='Apache-2.0',
-    entry_points={
-        'console_scripts': [
-            'serial_bridge = guido_base.serial_bridge:main',
-            'keyboard_teleop = guido_base.keyboard_teleop:main',
-        ],
-    },
 )

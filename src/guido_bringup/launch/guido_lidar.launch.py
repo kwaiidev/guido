@@ -3,15 +3,22 @@
 Starts:
   1. robot_state_publisher  - publishes the Guido URDF TF tree
   2. guido_serial_bridge    - cmd_vel <-> Arduino serial <-> odom + TF
-  3. ldlidar_bringup        - LDLidar driver (scan topic + ldlidar TF)
+  3. ldlidar_component      - LDLidar driver in a component container (scan on ~/scan)
   4. lifecycle_manager      - auto-configures and activates the lidar node
+
+The upstream ``ldlidar_node`` package does not ship a standalone executable; the driver is
+``ldlidar::LdLidarComponent`` loaded into ``component_container_isolated``, same as
+``ldlidar_bringup.launch.py`` in the LDLidar repo (without their duplicate lidar URDF publisher).
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import LoadComposableNodes
 from launch_ros.actions import Node
+from launch_ros.descriptions import ComposableNode
 
 
 def generate_launch_description():
@@ -42,12 +49,27 @@ def generate_launch_description():
         parameters=[bridge_config],
     )
 
-    ldlidar_bringup = Node(
-        package='ldlidar_node',
-        executable='ldlidar_node',
-        name='ldlidar_node',
+    ldlidar_container = ComposableNodeContainer(
+        name='ldlidar_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container_isolated',
+        composable_node_descriptions=[],
         output='screen',
+    )
+
+    ldlidar_component = ComposableNode(
+        package='ldlidar_component',
+        plugin='ldlidar::LdLidarComponent',
+        name='ldlidar_node',
+        namespace='',
         parameters=[ldlidar_config],
+        extra_arguments=[{'use_intra_process_comms': True}],
+    )
+
+    load_ldlidar = LoadComposableNodes(
+        target_container=ldlidar_container,
+        composable_node_descriptions=[ldlidar_component],
     )
 
     lifecycle_manager = Node(
@@ -61,6 +83,7 @@ def generate_launch_description():
     return LaunchDescription([
         guido_state_publisher,
         serial_bridge,
-        ldlidar_bringup,
+        ldlidar_container,
+        load_ldlidar,
         lifecycle_manager,
     ])

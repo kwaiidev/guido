@@ -1,0 +1,9 @@
+guido_localization_bridge:
+  ros__parameters:
+    global_frame: 'map'
+    base_frame: 'base_footprint'
+    odom_frame: 'odom'
+    publish_rate_hz: 20.0
+    pose_topic: '/navigation/pose'
+    localization_ok_topic: '/navigation/localization_ok'
+    allow_odom_fallback: false

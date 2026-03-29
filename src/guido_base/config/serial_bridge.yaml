@@ -5,8 +5,13 @@ guido_serial_bridge:
     wheel_base: 0.17          # meters, must match Arduino WHEEL_BASE
     max_wheel_vel: 0.5        # m/s at PWM 255; measure and tune this
     cmd_timeout_sec: 0.5      # send STOP after this many seconds with no cmd_vel
+    cmd_topic: 'cmd_vel'
+    odom_topic: 'odom'
+    imu_topic: 'imu/data_raw'
     odom_frame: 'odom'
     base_frame: 'base_footprint'
+    imu_frame: 'base_link'
+    publish_tf: true
     # Direction and gain calibration for the chair's motor controller channels.
     invert_left: false
     invert_right: false

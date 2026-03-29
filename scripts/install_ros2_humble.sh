@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#  ROS 2 Jazzy Jalisco installer for Ubuntu 24.04 (Desktop & Jetson JP6)
-#  Run: chmod +x scripts/install_ros2_jazzy.sh && sudo ./scripts/install_ros2_jazzy.sh
+#  ROS 2 Humble Hawksbill installer for Ubuntu 22.04 (Jammy)
+#  Run: chmod +x scripts/install_ros2_humble.sh && sudo ./scripts/install_ros2_humble.sh
 
 echo "=========================================="
-echo " Installing ROS 2 Jazzy (Ubuntu 24.04)"
+echo " Installing ROS 2 Humble (Ubuntu 22.04 Jammy)"
 echo "=========================================="
 
 apt-get update && apt-get install -y \
@@ -25,9 +25,9 @@ http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME
 
 apt-get update
 
-echo "Installing ROS 2 Jazzy desktop + dev tools..."
+echo "Installing ROS 2 Humble desktop + dev tools..."
 apt-get install -y \
-  ros-jazzy-desktop \
+  ros-humble-desktop \
   ros-dev-tools \
   python3-colcon-common-extensions \
   python3-rosdep \
@@ -36,33 +36,33 @@ apt-get install -y \
 if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
   rosdep init
 fi
-rosdep update --rosdistro jazzy
+rosdep update --rosdistro humble
 
-echo "Installing LDLidar dependencies..."
+echo "Installing LDLidar / Nav2 dependencies..."
 apt-get install -y \
   libudev-dev \
-  ros-jazzy-navigation2 \
-  ros-jazzy-nav2-bringup \
-  ros-jazzy-nav2-lifecycle-manager \
-  ros-jazzy-nav2-map-server \
-  ros-jazzy-nav2-util \
-  ros-jazzy-nav2-msgs \
-  ros-jazzy-robot-state-publisher \
-  ros-jazzy-diagnostic-updater \
-  ros-jazzy-bond \
-  ros-jazzy-bondcpp \
-  ros-jazzy-slam-toolbox
+  ros-humble-navigation2 \
+  ros-humble-nav2-bringup \
+  ros-humble-nav2-lifecycle-manager \
+  ros-humble-nav2-map-server \
+  ros-humble-nav2-util \
+  ros-humble-nav2-msgs \
+  ros-humble-robot-state-publisher \
+  ros-humble-diagnostic-updater \
+  ros-humble-bond \
+  ros-humble-bondcpp \
+  ros-humble-slam-toolbox
 
 BASHRC="/home/${SUDO_USER:-$USER}/.bashrc"
-if ! grep -q "ros/jazzy/setup.bash" "$BASHRC" 2>/dev/null; then
+if ! grep -q "ros/humble/setup.bash" "$BASHRC" 2>/dev/null; then
   echo "" >> "$BASHRC"
-  echo "# ROS 2 Jazzy" >> "$BASHRC"
-  echo "source /opt/ros/jazzy/setup.bash" >> "$BASHRC"
+  echo "# ROS 2 Humble" >> "$BASHRC"
+  echo "source /opt/ros/humble/setup.bash" >> "$BASHRC"
 fi
 
 echo ""
 echo "=========================================="
-echo " ROS 2 Jazzy installation complete!"
+echo " ROS 2 Humble installation complete!"
 echo " Open a new terminal or run:"
-echo "   source /opt/ros/jazzy/setup.bash"
+echo "   source /opt/ros/humble/setup.bash"
 echo "=========================================="

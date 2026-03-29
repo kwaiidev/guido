@@ -46,10 +46,6 @@ COMMAND_REWRITES = (
 )
 TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 DIRECT_ROS_COMMANDS = {
-    "start exploration": "start_exploration",
-    "start exploring": "start_exploration",
-    "explore": "start_exploration",
-    "begin exploration": "start_exploration",
     "cancel": "cancel_navigation",
     "cancel navigation": "cancel_navigation",
     "cancel mission": "cancel_navigation",
@@ -348,7 +344,7 @@ async def main(argv: list[str] | None = None) -> int:
                 return 2
             eprint(
                 "adk_transcript_bridge: failed to load Google ADK dependencies; "
-                "only direct ROS commands like stop/cancel/start exploration will be available."
+                "only direct ROS commands like stop/cancel will be available."
             )
             eprint(f"details: {exc}")
         else:
@@ -366,7 +362,7 @@ async def main(argv: list[str] | None = None) -> int:
     elif not args.dry_run:
         eprint(
             "adk_transcript_bridge: GOOGLE_API_KEY is not set; only direct ROS commands "
-            "like stop/cancel/start exploration will be available."
+            "like stop/cancel will be available."
         )
 
     last_transcript = ""
