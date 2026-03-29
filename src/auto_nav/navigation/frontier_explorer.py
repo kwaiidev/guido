@@ -89,17 +89,16 @@ class FrontierExplorer(Node):
                                os.path.expanduser('~/guido/maps/frontier_map'))
         self.declare_parameter('goal_retreat_m', 0.3)
         self.declare_parameter('goal_snap_radius_m', 1.0)
-        self.declare_parameter('min_goal_dist_from_robot_m', 0.55)
+        self.declare_parameter('min_goal_dist_from_robot_m', 0.5)
 
         self.declare_parameter('direct_cmd_topic', '/cmd_vel')
-        self.declare_parameter('drive_linear_speed',  0.5)
-        self.declare_parameter('drive_angular_kp',    2.0)
+        self.declare_parameter('drive_linear_speed',  0.10)
+        self.declare_parameter('drive_angular_kp',    8.0)
         self.declare_parameter('drive_angular_kd',    0.3)
-        self.declare_parameter('drive_max_angular',   6.0)
-        self.declare_parameter('drive_goal_tol_m',    0.20)
+        self.declare_parameter('drive_max_angular',   19.0)
+        self.declare_parameter('drive_goal_tol_m',    0.10)
         self.declare_parameter('drive_heading_tol',   0.25)
-        self.declare_parameter('obstacle_stop_m',     0.25)
-        self.declare_parameter('obstacle_slow_m',     0.50)
+        self.declare_parameter('obstacle_stop_m',     0.30)
         self.declare_parameter('obstacle_sector_deg', 25.0)
 
         self._min_frontier_size = int(self.get_parameter('min_frontier_size').value)
@@ -123,7 +122,6 @@ class FrontierExplorer(Node):
         self._drive_goal_tol     = float(self.get_parameter('drive_goal_tol_m').value)
         self._drive_heading_tol  = float(self.get_parameter('drive_heading_tol').value)
         self._obstacle_stop      = float(self.get_parameter('obstacle_stop_m').value)
-        self._obstacle_slow      = float(self.get_parameter('obstacle_slow_m').value)
         self._obstacle_sector    = math.radians(
             float(self.get_parameter('obstacle_sector_deg').value))
 
@@ -296,11 +294,8 @@ class FrontierExplorer(Node):
             # Rotate in place until facing the goal
             cmd.angular.z = angular_z
         else:
-            # Drive forward; slow down as obstacles get closer
-            raw_scale = ((obstacle_dist - self._obstacle_stop)
-                         / max(self._obstacle_slow - self._obstacle_stop, 1e-6))
-            speed_scale = max(0.0, min(1.0, raw_scale))
-            cmd.linear.x = self._drive_linear_speed * speed_scale
+            # Drive forward at full speed; hard stop handled above
+            cmd.linear.x = self._drive_linear_speed
             cmd.angular.z = angular_z * 0.4  # light correction while moving
 
         self._cmd_vel_pub.publish(cmd)
